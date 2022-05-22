@@ -17,3 +17,4 @@ class QuickstartUser(HttpUser):
 
     def on_start(self):
         self.client.post("/", json={"username":"", "password":""}) 
+        
