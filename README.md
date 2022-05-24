@@ -23,6 +23,8 @@ Locust classes:
     - wait_time()
     - weight=10
 - HttpUser
+    - It creates 'client', an instance of HttpSession
+    - GET, POST, PUT, DELETE, HEAD, headers, text, status_code, etc.
 - TaskSet
 - SequentialTaskSet
 - HttpSession
