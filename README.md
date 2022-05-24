@@ -29,6 +29,7 @@ Locust classes:
 - TaskSet
     - Picks up a task -> Execute it -> wait_time
     - Taskset can be nested, client, interrupt
+    - self.interrupt(reshedule=True)
     - on_start(), on_stop(), parent, tasks, user
     - wait(), wait_time()
 - SequentialTaskSet

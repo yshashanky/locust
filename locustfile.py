@@ -69,14 +69,16 @@ class MyHTTPCat(TaskSet):
     @task
     def get_status(self):
         self.client.get("/200")
-        print("get status of 200")
+        print("Get Status of 200")
 
     @task
-    def get_random_status(self):
-        status_codes = [100,101,102,103,104,200,205,206,500,404]
-        random_url = "/" + str(random.choice(status_codes))
-        res = self.client.get(random_url)
-        print("random status code")
+    class MyAnotherHTTPCat(TaskSet):
+
+        @task
+        def get_status_500(self):
+            self.client.get("/500")
+            print("Get Status of 500")
+            self.interrupt(reschedule=False)
 
 class MyLoadTest(HttpUser):
     host = "https://http.cat"
