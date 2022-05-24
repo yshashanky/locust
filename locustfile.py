@@ -3,27 +3,27 @@ from locust import HttpUser, task, between, User, constant
 
 #Sample HttpUser Class:
 
-class MyReqRes(HttpUser):
+# class MyReqRes(HttpUser):
 
-    host = "https://regres.in"
-    #wait_time = between(1, 5)
-    wait_time = constant(1)
+#     host = "https://regres.in"
+#     #wait_time = between(1, 5)
+#     wait_time = constant(1)
 
-    @task
-    def get_users(self):
-        res = self.client.get("/api/users?page=2")
-        print(res.text)
-        print(res.status_code)
-        print(res.headers)
+#     @task
+#     def get_users(self):
+#         res = self.client.get("/api/users?page=2")
+#         print(res.text)
+#         print(res.status_code)
+#         print(res.headers)
 
-    @task
-    def create_users(self):
-        res = self.client.post("/api/users", data=''' 
-            {"name":"morpheus","job":"leader"}
-        ''')
-        print(res.text)
-        print(res.status_code)
-        print(res.headers)
+#     @task
+#     def create_users(self):
+#         res = self.client.post("/api/users", data=''' 
+#             {"name":"morpheus","job":"leader"}
+#         ''')
+#         print(res.text)
+#         print(res.status_code)
+#         print(res.headers)
 
     # @task
     # def view_items(self):
@@ -60,3 +60,5 @@ class MyReqRes(HttpUser):
 #     @task 
 #     def search2(self):
 #         print("Second search test")
+
+# Sample Taskset Class:
