@@ -5,7 +5,7 @@ Starting with locust:
 - To run with the web UI, run with following command: locust or locust -f filename.py
 - For direct command line usage use: locust --headless --users 10 --spawn-rate 1 -H https://oceanready-personalinfo-ui.prod.ocean.com/ {http://your-server.com}
 - To terminate locust: ctrl+c
-
+- Locust web UI runs on localhost:8089
 
 Terminologies:
 - Swarm: A group travelling in same direction
