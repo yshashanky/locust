@@ -29,7 +29,8 @@ Locust classes:
 - TaskSet
     - Picks up a task -> Execute it -> wait_time
     - Taskset can be nested, client, interrupt
-    - self.interrupt(reshedule=True)
+    - When taskset is nested, it did not come to parent class again from the nested class to make it happen we need to use self.interrupt function - self.interrupt(reshedule=True): it will go instantly to the parent class
+    - self.interrupt(reshedule=False): it will after the wait time to the parent class
     - on_start(), on_stop(), parent, tasks, user
     - wait(), wait_time()
 - SequentialTaskSet
