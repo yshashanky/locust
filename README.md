@@ -1,15 +1,16 @@
 # locust
 Starting with locust:
 - Learning series: https://www.youtube.com/playlist?list=PLJ9A48W0kpRKMCzJARCObgJs3SinOewp5
-- Main file:  locustfile.py
-- To run with the web UI, run with following command: locust
+- Main file:  create a python file
+- To run with the web UI, run with following command: locust or locust -f filename.py
 - For direct command line usage use: locust --headless --users 10 --spawn-rate 1 -H https://oceanready-personalinfo-ui.prod.ocean.com/ {http://your-server.com}
+- To terminate locust: ctrl+c
 
 
 Terminologies:
 - Swarm: A group travelling in same direction
 - Hatching: Production
-- Spwan: Release or deposite
+- Spwan: Release or deposite 
 - greenlet: creates micro threads
 
 Locust classes:
