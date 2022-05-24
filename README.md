@@ -4,3 +4,21 @@ Starting with locust:
 - Main file:  locustfile.py
 - To run with the web UI, run with following command: locust
 - For direct command line usage use: locust --headless --users 10 --spawn-rate 1 -H https://oceanready-personalinfo-ui.prod.ocean.com/ {http://your-server.com}
+
+
+Terminologies:
+- Swarm: A group travelling in same direction
+- Hatching: Production
+- Spwan: Release or deposite
+
+Locust classes:
+- User
+- HttpUser
+- TaskSet
+- SequentialTaskSet
+- HttpSession
+- Response
+- ResponseContextManager
+- Environment
+- Runner
+- WebUI
