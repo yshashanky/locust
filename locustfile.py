@@ -22,6 +22,8 @@ from locust import HttpUser, task, between, User, constant
 #Sample code 2:
 
 class MyFirstTest(User):
+    weight = 2
+    wait_time = constant(1)
 
     @task
     def launch(self):
@@ -32,7 +34,9 @@ class MyFirstTest(User):
         print("Searching")
 
 class MySecondTest(User):
-
+    weight = 2
+    wait_time = constant(1)
+    
     @task
     def launch2(self):
         print("Second test")
