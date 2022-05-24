@@ -10,9 +10,17 @@ Terminologies:
 - Swarm: A group travelling in same direction
 - Hatching: Production
 - Spwan: Release or deposite
+- greenlet: creates micro threads
 
 Locust classes:
 - User
+    - abstract=True
+    - on_start()
+    - on_stop()
+    - tasks
+    - wait()
+    - wait_time()
+    - weight=10
 - HttpUser
 - TaskSet
 - SequentialTaskSet

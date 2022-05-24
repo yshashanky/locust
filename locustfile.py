@@ -20,3 +20,14 @@ from locust import HttpUser, task, between, User, constant
 #         self.client.post("/", json={"username":"", "password":""}) 
         
 #Sample code 2:
+
+class MyScript(User):
+    wait_time = constant(1)
+
+    @task
+    def launch(self):
+        print("Launching the URL")
+
+    @task
+    def search(self):
+        print("Searching")
