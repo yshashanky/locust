@@ -6,6 +6,7 @@ Starting with locust:
 - For direct command line usage use: locust --headless --users 10 --spawn-rate 1 -H https://oceanready-personalinfo-ui.prod.ocean.com/ {http://your-server.com}
 - To terminate locust: ctrl+c
 - Locust web UI runs on localhost:8089
+- Without user class locust will not run
 
 Terminologies:
 - Swarm: A group travelling in same direction

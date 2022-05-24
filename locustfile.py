@@ -1,5 +1,6 @@
 import time
-from locust import HttpUser, task, between, User, constant
+import random
+from locust import TaskSet, HttpUser, task, between, User, constant
 
 #Sample HttpUser Class:
 
@@ -62,3 +63,22 @@ from locust import HttpUser, task, between, User, constant
 #         print("Second search test")
 
 # Sample Taskset Class:
+
+class MyHTTPCat(TaskSet):
+
+    @task
+    def get_status(self):
+        self.client.get("/200")
+        print("get status of 200")
+
+    @task
+    def get_random_status(self):
+        status_codes = [100,101,102,103,104,200,205,206,500,404]
+        random_url = "/" + str(random.choice(status_codes))
+        res = self.client.get(random_url)
+        print("random status code")
+
+class MyLoadTest(HttpUser):
+    host = "https://http.cat"
+    tasks = [MyHTTPCat]
+    wait_time = constant(1)
