@@ -21,8 +21,7 @@ from locust import HttpUser, task, between, User, constant
         
 #Sample code 2:
 
-class MyScript(User):
-    wait_time = constant(1)
+class MyFirstTest(User):
 
     @task
     def launch(self):
@@ -31,3 +30,13 @@ class MyScript(User):
     @task
     def search(self):
         print("Searching")
+
+class MySecondTest(User):
+
+    @task
+    def launch2(self):
+        print("Second test")
+
+    @task 
+    def search2(self):
+        print("Second search test")
