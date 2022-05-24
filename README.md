@@ -26,6 +26,10 @@ Locust classes:
     - It creates 'client', an instance of HttpSession
     - GET, POST, PUT, DELETE, HEAD, headers, text, status_code, etc.
 - TaskSet
+    - Picks up a task -> Execute it -> wait_time
+    - Taskset can be nested, client, interrupt
+    - on_start(), on_stop(), parent, tasks, user
+    - wait(), wait_time()
 - SequentialTaskSet
 - HttpSession
 - Response
