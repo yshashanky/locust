@@ -13,7 +13,7 @@ Terminologies:
 - greenlet: creates micro threads
 
 Locust classes:
-- User
+- User:
     - abstract=True
     - on_start()
     - on_stop()
