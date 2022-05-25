@@ -90,5 +90,14 @@
 - WEB UI, Master & Worker, Tag, etc.
 
 ### Validating responses:
-- even response code is 200, doesn't mean it is success
-- validating response is important
+- even response code is 200, doesn't mean it is success, validating response is important
+- catch_response=True
+- response.success()
+- response.failure()
+    - eg: with self.client.get("/xml", catch_response=True, name="XML")as response:
+        if response.status_code == 200 and "WonderWidgets"in response.text:
+            print("XML")
+            response.success()
+        else:
+            response.failure("Failed XML request")
+
