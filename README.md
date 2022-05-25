@@ -59,3 +59,19 @@
 - Environment
 - Runner
 - WebUI
+
+- Command line options
+    - Runtime:
+        - locust -h: gives all the commands
+        - locust -f filename.py -u 1 -r 1 -t 10s --headless --print-stats --csv Run1.csv --csv-full-history --host=https://example.com
+            - -f filename.py: give the path of file to run
+            - -u 1: give no. of users here; it is one
+            - -r 1: give spwan rate here; it is one
+            - -t 10s: give duration for which test will run; 10sec is duration here (h: hour, m:min, s:seconds)
+            - headless: webUI will not be started everything will be printed in UI
+            - --print-stats: print all statics in terminal
+            - --csv Run1.csv --csv-full-history: use to store all the stats in csv file
+            - --host=https://example.com: give address of host here
+    - Stats
+    - Log
+    - WEB UI, Master & Worker, Tag, etc.
