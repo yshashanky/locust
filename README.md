@@ -89,6 +89,6 @@
 
 - WEB UI, Master & Worker, Tag, etc.
 
-#### Validating responses:
+### Validating responses:
 - even response code is 200, doesn't mean it is success
 - validating response is important
