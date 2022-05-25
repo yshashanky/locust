@@ -101,3 +101,6 @@
         else:
             response.failure("Failed XML request")
 
+### Data parameterization:
+- testing with multiple set of data
+- test data in seperate file/python file/third party library
