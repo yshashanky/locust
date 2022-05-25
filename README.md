@@ -87,7 +87,13 @@
     - locust -f filename.py --show-task-ratio: print the task execution ratio; prints in table format
     - locust -f filename.py --show-task-ratio-json: print task execution ratio in json format
 
-- WEB UI, Master & Worker, Tag, etc.
+- Tag
+    - decorator for tagging tasks and tasksets
+    - @tag('tagname', 'tagname', ...)
+    - --tags tagname: used to run on tagged items
+    - --exclude-tags tagname: used to exclude tagged items
+
+- WEB UI, Master & Worker, etc.
 
 ### Validating responses:
 - even response code is 200, doesn't mean it is success, validating response is important
