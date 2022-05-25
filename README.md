@@ -47,11 +47,15 @@
     - on_start(), on_stop(), parent, user
     - schedule_task(task_callable,first=false), wait_time()
 
-- wait_time functions
+- wait_time function
     - unit is seconds
     - between(min, max)
     - constant(wait time)
     - constant_pacing(wait time)
+
+- on_start and on_stop method
+    - Don't use @task decorator for these methods
+    - It executes only once
 
 - HttpSession
 - Response
@@ -60,7 +64,7 @@
 - Runner
 - WebUI
 
-## Command line options
+## Command line options:
 - Runtime:
     - locust -h: gives all the commands
     - locust -f filename.py -u 1 -r 1 -t 10s --headless --print-stats --csv Run1.csv --csv-full-history --host=https://example.com
@@ -72,10 +76,11 @@
         - --print-stats: print all statics in terminal
         - --csv Run1.csv --csv-full-history: use to store all the stats in csv file
         - --host=https://example.com: give address of host here
+        - --only-summary: prints only summary in terminal
 
 - Log, Stats
     - locust -f filename.py -u 1 -r 1 -t 10s --headless --print-stats --csv Run1.csv --csv-full-history --host=https://example.com -L CRITICAL --logfile mylog.log --html Run1
-        - -L CRITICAL: level of info we want to log; options: DEBUG/INFO/WARNING/ERROR/CRITICAL
+        - -L CRITICAL: level of info we want to log; options are: DEBUG/INFO/WARNING/ERROR/CRITICAL
         - --logfile mylog.log: create log file with given name
         - --html Run1: create HTML report with given name
     - locust -f filename.py -l: Lists all the user classes

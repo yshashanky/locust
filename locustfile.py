@@ -89,19 +89,35 @@ from locust import TaskSet, SequentialTaskSet, HttpUser, task, between, User, co
 
 # Sample Sequential Taskset Class:
 
-class MySeqTaskset(SequentialTaskSet):
+# class MySeqTaskset(SequentialTaskSet):
 
-    @task
-    def get_status(self):
-        self.client.get("/200")
-        print("Status of 200")
+#     @task
+#     def get_status(self):
+#         self.client.get("/200")
+#         print("Status of 200")
 
-    @task
-    def get_status_500(self):
-        self.client.get("/200")
-        print("Status of 500")
+#     @task
+#     def get_status_500(self):
+#         self.client.get("/200")
+#         print("Status of 500")
 
-class MyLoadTest(HttpUser):
-    host = "https://http.cat"
-    tasks = [MySeqTaskset]
+# class MyLoadTest(HttpUser):
+#     host = "https://http.cat"
+#     tasks = [MySeqTaskset]
+#     wait_time = constant(1)
+
+# Sample on_start and on_stop Methods:
+
+class MyTest(User):
+    
     wait_time = constant(1)
+
+    def on_start(self):
+        print("Starting")
+
+    @task 
+    def task_1(self):
+        print("My Tasks")
+
+    def on_stop(self):
+        print("Stopping")
