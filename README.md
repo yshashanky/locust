@@ -7,6 +7,7 @@ Starting with locust:
 - To terminate locust: ctrl+c
 - Locust web UI runs on localhost:8089
 - Without user class locust will not run
+- Tasks are picked randomly in locust
 
 Terminologies:
 - Swarm: A group travelling in same direction
@@ -37,6 +38,8 @@ Locust classes:
     - on_start(), on_stop(), parent, tasks, user
     - wait(), wait_time()
 - SequentialTaskSet
+    - define the task in sequential order
+    - task weight will be ignored
 - HttpSession
 - Response
 - ResponseContextManager
