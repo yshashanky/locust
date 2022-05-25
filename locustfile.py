@@ -62,6 +62,7 @@ from locust import TaskSet, HttpUser, task, between, User, constant
 #     def search2(self):
 #         print("Second search test")
 
+
 # Sample Taskset Class:
 
 class MyHTTPCat(TaskSet):
