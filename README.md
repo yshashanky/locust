@@ -88,3 +88,7 @@
     - locust -f filename.py --show-task-ratio-json: print task execution ratio in json format
 
 - WEB UI, Master & Worker, Tag, etc.
+
+#### Validating responses:
+- even response code is 200, doesn't mean it is success
+- validating response is important
