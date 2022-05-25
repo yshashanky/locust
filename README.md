@@ -40,6 +40,9 @@ Locust classes:
 - SequentialTaskSet
     - define the task in sequential order
     - task weight will be ignored
+    - client, interrupt(reschedule=True)
+    - on_start(), on_stop(), parent, user
+    - schedule_task(task_callable,first=false), wait_time()
 - HttpSession
 - Response
 - ResponseContextManager

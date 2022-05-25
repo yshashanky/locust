@@ -1,6 +1,6 @@
 import time
 import random
-from locust import TaskSet, HttpUser, task, between, User, constant
+from locust import TaskSet, SequentialTaskSet, HttpUser, task, between, User, constant
 
 #Sample HttpUser Class:
 
@@ -65,23 +65,43 @@ from locust import TaskSet, HttpUser, task, between, User, constant
 
 # Sample Taskset Class:
 
-class MyHTTPCat(TaskSet):
+# class MyHTTPCat(TaskSet):
+
+#     @task
+#     def get_status(self):
+#         self.client.get("/200")
+#         print("Get Status of 200")
+#         self.interrupt(reschedule=False)
+
+# class MyAnotherHTTPCat(TaskSet):
+
+#     @task
+#     def get_status_500(self):
+#         self.client.get("/500")
+#         print("Get Status of 500")
+#         self.interrupt(reschedule=False)
+
+# class MyLoadTest(HttpUser):
+#     host = "https://http.cat"
+#     tasks = [MyHTTPCat, MyAnotherHTTPCat]
+#     wait_time = constant(1)
+
+
+# Sample Sequential Taskset Class:
+
+class MySeqTaskset(SequentialTaskSet):
 
     @task
     def get_status(self):
         self.client.get("/200")
-        print("Get Status of 200")
-        self.interrupt(reschedule=False)
-
-class MyAnotherHTTPCat(TaskSet):
+        print("Status of 200")
 
     @task
     def get_status_500(self):
-        self.client.get("/500")
-        print("Get Status of 500")
-        self.interrupt(reschedule=False)
+        self.client.get("/200")
+        print("Status of 500")
 
 class MyLoadTest(HttpUser):
     host = "https://http.cat"
-    tasks = [MyHTTPCat, MyAnotherHTTPCat]
+    tasks = [MySeqTaskset]
     wait_time = constant(1)
