@@ -72,7 +72,14 @@
         - --print-stats: print all statics in terminal
         - --csv Run1.csv --csv-full-history: use to store all the stats in csv file
         - --host=https://example.com: give address of host here
-        
-- Stats
-- Log
+
+- Log, Stats
+    - locust -f filename.py -u 1 -r 1 -t 10s --headless --print-stats --csv Run1.csv --csv-full-history --host=https://example.com -L CRITICAL --logfile mylog.log --html Run1
+        - -L CRITICAL: level of info we want to log; options: DEBUG/INFO/WARNING/ERROR/CRITICAL
+        - --logfile mylog.log: create log file with given name
+        - --html Run1: create HTML report with given name
+    - locust -f filename.py -l: Lists all the user classes
+    - locust -f filename.py --show-task-ratio: print the task execution ratio; prints in table format
+    - locust -f filename.py --show-task-ratio-json: print task execution ratio in json format
+
 - WEB UI, Master & Worker, Tag, etc.
