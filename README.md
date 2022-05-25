@@ -24,9 +24,11 @@ Locust classes:
     - wait()
     - wait_time()
     - weight=10
+
 - HttpUser
     - It creates 'client', an instance of HttpSession
     - GET, POST, PUT, DELETE, HEAD, headers, text, status_code, etc.
+
 - TaskSet
     - Picks up a task -> Execute it -> wait_time
     - Taskset can be nested, client, interrupt
@@ -37,12 +39,20 @@ Locust classes:
     - self.interrupt(reshedule=False): it will after the wait time to the parent class
     - on_start(), on_stop(), parent, tasks, user
     - wait(), wait_time()
+
 - SequentialTaskSet
     - define the task in sequential order
     - task weight will be ignored
     - client, interrupt(reschedule=True)
     - on_start(), on_stop(), parent, user
     - schedule_task(task_callable,first=false), wait_time()
+
+- wait_time functions
+    - unit is seconds
+    - between(min, max)
+    - constant(wait time)
+    - constant_pacing(wait time)
+
 - HttpSession
 - Response
 - ResponseContextManager
