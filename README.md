@@ -1,5 +1,5 @@
 # locust
-###### Starting with locust:
+## Starting with locust:
 - Learning series: https://www.youtube.com/playlist?list=PLJ9A48W0kpRKMCzJARCObgJs3SinOewp5
 - Main file:  create a python file
 - To run with the web UI, run with following command: locust or locust -f filename.py
@@ -9,13 +9,13 @@
 - Without user class locust will not run
 - Tasks are picked randomly in locust
 
-###### Terminologies:
+## Terminologies:
 - Swarm: A group travelling in same direction
 - Hatching: Production
 - Spwan: Release or deposite 
 - greenlet: creates micro threads
 
-###### Locust classes:
+## Locust classes:
 - User:
     - abstract=True
     - on_start()
