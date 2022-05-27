@@ -127,4 +127,39 @@
     - logging.critical()
     - logging.debug()
     - logging.warning()
-    
+
+### Configuration of Locust
+- Command line eg. -host, -u, -r
+- https://docs.locust.io/en/latest/configuration.html#environment-variables
+- Environment Variables:
+    - LOCUST_HOST
+    - LOCUST_USERS
+    - LOCUST_SPAWN_RATE
+    - LOCUST_HEADLESS
+    - LOCUST_TAGS
+    - LOCUST_MODE_MASTER
+    - etc...
+- Configuration file
+    - name.conf or name.yaml
+    - eg. name.conf file
+        - [runtime settings]
+        - host=http://example.com
+        - users=2
+        - spawn-rate=1
+        - run-time=5s
+        - headless=true
+        - only-summary=true
+    - eg. name.yaml file
+        - #Runtime Settings
+        - host:https://httpbin.org
+        - users:2
+        - spawn-rate:1
+        - run-time:5s
+        - headless:true
+        - only-summary:true
+- Override Order(Priority to check conf)
+    - ~/locust.conf in Home dir
+    - ./locust.conf in Current dir
+    - file specified using --conf
+    - env variables
+    - command line arguments
