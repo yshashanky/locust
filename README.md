@@ -115,3 +115,15 @@
 - extracting the dynamic value from the response
 - pass the extracted value in the subsequent requests
 - Regular expressions, parsers
+
+### Logging in Locust
+- Logging helps to debug script, CI/CD etc
+- --skip-log-setup: skip logging setup
+- --logfile mylog.log
+- --loglevel: DEBUG/INFO/WARNING/ERROR/CRITICAL
+- eg: import logging
+    - logging.info()
+    - logging.error()
+    - logging.critical()
+    - logging.debug()
+    - logging.warning()
