@@ -1,4 +1,4 @@
-## locust
+## Learning Locust
 ### Starting with locust:
 - Learning series: https://www.youtube.com/playlist?list=PLJ9A48W0kpRKMCzJARCObgJs3SinOewp5
 - Main file:  create a python file
