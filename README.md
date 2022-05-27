@@ -224,3 +224,4 @@
 - Important:
     - Locust scripts must be present in all the master and worker machines
     - number_of_users > number_of_user_classes * number_of_workers
+    
