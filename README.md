@@ -224,4 +224,16 @@
 - Important:
     - Locust scripts must be present in all the master and worker machines
     - number_of_users > number_of_user_classes * number_of_workers
-    
+
+### Running Locust in Docker
+- docker run -p 8089:8089 -v $PWD:/mnt/locust -d locustio/locust -f /mnt/locust/locustfile.py
+- docker run -v$PWD:/mnt/locust locustio/locust -f /mnt/locust/locustfile.py html /mnt/locust/myrun1.html --headless --only-summary -r1-u1-t 10s
+- docker ps
+- docker exec -it {container_id}/bin/bash
+
+### Distributed Load Testing in Docker
+- We need to docker compose to run and build the images
+- We need to defien containers and conf in yml file
+- to run: docker compose up
+- to stop: ctrl + C
+- to delete containers: docker compose rm
