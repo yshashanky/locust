@@ -1,0 +1,128 @@
+[2022-05-27 23:38:19,418] M5-L-131C874/INFO/locust.main: Run time limit set to 20 seconds
+[2022-05-27 23:38:19,420] M5-L-131C874/INFO/locust.main: Starting Locust 2.9.0
+[2022-05-27 23:38:19,423] M5-L-131C874/INFO/locust.runners: Ramping to 1 users at a rate of 1.00 per second
+[2022-05-27 23:38:19,423] M5-L-131C874/DEBUG/locust.runners: Ramping to {"LoadTest": 1} (1 total users)
+[2022-05-27 23:38:19,424] M5-L-131C874/DEBUG/locust.runners: Spawning additional {"LoadTest": 1} ({"LoadTest": 0} already running)...
+[2022-05-27 23:38:19,425] M5-L-131C874/DEBUG/locust.runners: 1 users spawned
+[2022-05-27 23:38:19,425] M5-L-131C874/DEBUG/locust.runners: All users of class LoadTest spawned
+[2022-05-27 23:38:19,426] M5-L-131C874/DEBUG/locust.runners: 0 users have been stopped, 1 still running
+[2022-05-27 23:38:19,426] M5-L-131C874/INFO/locust.runners: All users spawned: {"LoadTest": 1} (1 total users)
+[2022-05-27 23:38:19,430] M5-L-131C874/DEBUG/urllib3.connectionpool: Starting new HTTPS connection (1): petstore.octoperf.com:443
+[2022-05-27 23:38:20,437] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET / HTTP/1.1" 200 1155
+[2022-05-27 23:38:20,445] M5-L-131C874/ERROR/locust.user.task: Unable to configure logger 'locust'
+Traceback (most recent call last):
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 619, in configure
+    self.configure_logger(name, loggers[name])
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 796, in configure_logger
+    self.common_logger_config(logger, config, incremental)
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 781, in common_logger_config
+    logger.setLevel(logging._checkLevel(level))
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\__init__.py", line 198, in _checkLevel
+    raise ValueError("Unknown level: %r" % level)
+ValueError: Unknown level: 'TESTING'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\user\task.py", line 319, in run
+    self.execute_next_task()
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\user\task.py", line 344, in execute_next_task
+    self.execute_task(self._task_queue.pop(0))
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\user\task.py", line 356, in execute_task
+    task(self)
+  File "C:\Users\shashank.j.yadav\OneDrive - Accenture\Desktop\Projects\StartingLocust\locust\correlation.py", line 17, in home_page
+    log.setup_logging("Testing")
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\log.py", line 64, in setup_logging
+    logging.config.dictConfig(LOGGING_CONFIG)
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 810, in dictConfig
+    dictConfigClass(config).configure()
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 621, in configure
+    raise ValueError('Unable to configure logger '
+ValueError: Unable to configure logger 'locust'
+
+[2022-05-27 23:38:21,701] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Catalog.action HTTP/1.1" 200 5119
+[2022-05-27 23:38:23,040] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Account.action;jsessionid=F4C35FAE89C72720902D3F181A570422?signonForm= HTTP/1.1" 200 4106
+[2022-05-27 23:38:24,538] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "POST /actions/Account.action HTTP/1.1" 302 0
+[2022-05-27 23:38:24,767] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Catalog.action;jsessionid=001031379069450B2C9A5040C5EE1326 HTTP/1.1" 200 4730
+[2022-05-27 23:38:25,962] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Catalog.action?viewCategory=&categoryId=CATS HTTP/1.1" 200 3387
+[2022-05-27 23:38:27,204] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Account.action?signoff= HTTP/1.1" 302 0
+[2022-05-27 23:38:27,409] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Catalog.action HTTP/1.1" 200 4503
+[2022-05-27 23:38:28,636] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET / HTTP/1.1" 200 1155
+[2022-05-27 23:38:28,636] M5-L-131C874/ERROR/locust.user.task: Unable to configure logger 'locust'
+Traceback (most recent call last):
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 619, in configure
+    self.configure_logger(name, loggers[name])
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 796, in configure_logger
+    self.common_logger_config(logger, config, incremental)
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 781, in common_logger_config
+    logger.setLevel(logging._checkLevel(level))
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\__init__.py", line 198, in _checkLevel
+    raise ValueError("Unknown level: %r" % level)
+ValueError: Unknown level: 'TESTING'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\user\task.py", line 319, in run
+    self.execute_next_task()
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\user\task.py", line 344, in execute_next_task
+    self.execute_task(self._task_queue.pop(0))
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\user\task.py", line 356, in execute_task
+    task(self)
+  File "C:\Users\shashank.j.yadav\OneDrive - Accenture\Desktop\Projects\StartingLocust\locust\correlation.py", line 17, in home_page
+    log.setup_logging("Testing")
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\log.py", line 64, in setup_logging
+    logging.config.dictConfig(LOGGING_CONFIG)
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 810, in dictConfig
+    dictConfigClass(config).configure()
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 621, in configure
+    raise ValueError('Unable to configure logger '
+ValueError: Unable to configure logger 'locust'
+
+[2022-05-27 23:38:29,869] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Catalog.action HTTP/1.1" 200 5119
+[2022-05-27 23:38:31,106] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Account.action;jsessionid=106EB65240DD91E6C8F4B1A9F208A178?signonForm= HTTP/1.1" 200 4108
+[2022-05-27 23:38:32,643] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "POST /actions/Account.action HTTP/1.1" 302 0
+[2022-05-27 23:38:32,840] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Catalog.action;jsessionid=FC1AA8E2EE59CB1BA53D18EDA7906F76 HTTP/1.1" 200 4730
+[2022-05-27 23:38:34,077] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Catalog.action?viewCategory=&categoryId=CATS HTTP/1.1" 200 3387
+[2022-05-27 23:38:35,304] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Account.action?signoff= HTTP/1.1" 302 0
+[2022-05-27 23:38:35,506] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Catalog.action HTTP/1.1" 200 4503
+[2022-05-27 23:38:36,675] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET / HTTP/1.1" 200 1155
+[2022-05-27 23:38:36,686] M5-L-131C874/ERROR/locust.user.task: Unable to configure logger 'locust'
+Traceback (most recent call last):
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 619, in configure
+    self.configure_logger(name, loggers[name])
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 796, in configure_logger
+    self.common_logger_config(logger, config, incremental)
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 781, in common_logger_config
+    logger.setLevel(logging._checkLevel(level))
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\__init__.py", line 198, in _checkLevel
+    raise ValueError("Unknown level: %r" % level)
+ValueError: Unknown level: 'TESTING'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\user\task.py", line 319, in run
+    self.execute_next_task()
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\user\task.py", line 344, in execute_next_task
+    self.execute_task(self._task_queue.pop(0))
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\user\task.py", line 356, in execute_task
+    task(self)
+  File "C:\Users\shashank.j.yadav\OneDrive - Accenture\Desktop\Projects\StartingLocust\locust\correlation.py", line 17, in home_page
+    log.setup_logging("Testing")
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\site-packages\locust\log.py", line 64, in setup_logging
+    logging.config.dictConfig(LOGGING_CONFIG)
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 810, in dictConfig
+    dictConfigClass(config).configure()
+  File "C:\Users\shashank.j.yadav\AppData\Local\Programs\Python\Python310\lib\logging\config.py", line 621, in configure
+    raise ValueError('Unable to configure logger '
+ValueError: Unable to configure logger 'locust'
+
+[2022-05-27 23:38:37,978] M5-L-131C874/DEBUG/urllib3.connectionpool: https://petstore.octoperf.com:443 "GET /actions/Catalog.action HTTP/1.1" 200 5119
+[2022-05-27 23:38:38,672] M5-L-131C874/INFO/locust.main: --run-time limit reached. Stopping Locust
+[2022-05-27 23:38:38,672] M5-L-131C874/DEBUG/locust.runners: Stopping all users
+[2022-05-27 23:38:38,672] M5-L-131C874/DEBUG/locust.runners: Stopping Greenlet-0
+[2022-05-27 23:38:38,672] M5-L-131C874/DEBUG/locust.runners: 1 users have been stopped, 0 still running
+[2022-05-27 23:38:38,672] M5-L-131C874/DEBUG/locust.main: Running teardowns...
+[2022-05-27 23:38:38,672] M5-L-131C874/INFO/locust.main: Shutting down (exit code 1)
+[2022-05-27 23:38:38,672] M5-L-131C874/DEBUG/locust.main: Cleaning up runner...

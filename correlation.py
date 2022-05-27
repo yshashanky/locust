@@ -89,3 +89,6 @@ class LoadTest(HttpUser):
     host = "https://petstore.octoperf.com"
     wait_time = constant(1)
     tasks = [PetStore]
+
+# Run with command:
+# locust -f correlation.py -u 1 -r 1 -t 20s --headless -L DEBUG --logfile mylog.log --only-summary
