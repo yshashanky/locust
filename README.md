@@ -193,3 +193,34 @@
                 print("Event was fired with arguments:%s,%s" % (a,b))
             my_event.add_listener(on_my_event)
             my_event.fire(a="foo",b="bar")
+
+### Distributed Load Testing
+- One master machine and many worker machines
+- Master machine -> Worker machines -> Injecting load to App
+- All conf will be done in master machine
+- Master - Worker setup:
+    - master.conf
+        - [master conf]
+        - master=true
+        - expect-workers=2
+        - [runtime settings]
+        - host=https://petstore.octoperf.com
+        - users=3
+        - spawn-rate=1
+        - locustfile=Distributed Load Testing\petstore.py
+        - run-time=60s
+        - headless=true
+        - only-summary=true
+    - worker.cong
+        - [worker conf]
+        - worker=true
+        - locustfile=Distributed Load Testing\petstore.py
+        - master-host=XXX.XXX.XXX.XXX
+- Running Master - Worker Setup:
+    - First run in master machine: locust --config master.conf
+    - Message: Waiting for workers to be ready,0 of 1 connected
+    - Then run in worker machine: locust --config worker.conf
+    - Message: Starting Locust 1.4.3
+- Important:
+    - Locust scripts must be present in all the master and worker machines
+    - number_of_users > number_of_user_classes * number_of_workers
