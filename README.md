@@ -110,3 +110,6 @@
 ### Data parameterization:
 - testing with multiple set of data
 - test data in seperate file/python file/third party library
+
+### Correlation in Locust
+- 
