@@ -163,3 +163,33 @@
     - file specified using --conf
     - env variables
     - command line arguments
+
+### Events and EventHook
+- Events
+    - a thing that happens,especially one of importance
+    - In Locust,you can do tasks at certain circumstances using the Event Hooks
+    - e.g.,before starting the test,during the test,or after the test
+    - test_start
+    - test_stop
+    - on_locust_init
+    - request failure
+    - request_success
+    - reset_stats
+    - user_error
+    - report_to_master, etc..
+    - How to fire the events?
+        - from locust import events.
+        - Use the decorator_
+        - e.g@events.spawning_complete.add_listener
+        - Recommended to add **kwargs(key word arguments)
+        - eg; @events.spawning_complete.add_listener
+            def spawn_users(user_count,**kwargs):
+            print("Spawned ...",user_count,users.")
+- EventHook
+    - Fire your own events
+    - reverse=True to fire events in the reverse order
+    - eg: my_event=EventHook()
+            def on_my_event(a,b,**kwargs): (two arguments are mandatory)
+                print("Event was fired with arguments:%s,%s" % (a,b))
+            my_event.add_listener(on_my_event)
+            my_event.fire(a="foo",b="bar")
