@@ -1,4 +1,4 @@
-# locust
+## locust
 ### Starting with locust:
 - Learning series: https://www.youtube.com/playlist?list=PLJ9A48W0kpRKMCzJARCObgJs3SinOewp5
 - Main file:  create a python file
@@ -8,13 +8,13 @@
 - Locust web UI runs on localhost:8089
 - Without user class locust will not run
 - Tasks are picked randomly in locust
-
+-----
 ### Terminologies:
 - Swarm: A group travelling in same direction
 - Hatching: Production
 - Spwan: Release or deposite 
 - greenlet: creates micro threads
-
+-----
 ### Locust classes:
 - User:
     - abstract=True
@@ -63,7 +63,7 @@
 - Environment
 - Runner
 - WebUI
-
+-----
 ### Command line options:
 - Runtime:
     - locust -h: gives all the commands
@@ -94,7 +94,7 @@
     - --exclude-tags tagname: used to exclude tagged items
 
 - WEB UI, Master & Worker, etc.
-
+-----
 ### Validating responses:
 - even response code is 200, doesn't mean it is success, validating response is important
 - catch_response=True
@@ -106,16 +106,16 @@
             response.success()
         else:
             response.failure("Failed XML request")
-
+-----
 ### Data parameterization:
 - testing with multiple set of data
 - test data in seperate file/python file/third party library
-
+-----
 ### Correlation in Locust
 - extracting the dynamic value from the response
 - pass the extracted value in the subsequent requests
 - Regular expressions, parsers
-
+-----
 ### Logging in Locust
 - Logging helps to debug script, CI/CD etc
 - --skip-log-setup: skip logging setup
@@ -127,7 +127,7 @@
     - logging.critical()
     - logging.debug()
     - logging.warning()
-
+-----
 ### Configuration of Locust
 - Command line eg. -host, -u, -r
 - https://docs.locust.io/en/latest/configuration.html#environment-variables
@@ -163,7 +163,7 @@
     - file specified using --conf
     - env variables
     - command line arguments
-
+-----
 ### Events and EventHook
 - Events
     - a thing that happens,especially one of importance
@@ -193,7 +193,7 @@
                 print("Event was fired with arguments:%s,%s" % (a,b))
             my_event.add_listener(on_my_event)
             my_event.fire(a="foo",b="bar")
-
+-----
 ### Distributed Load Testing
 - One master machine and many worker machines
 - Master machine -> Worker machines -> Injecting load to App
@@ -224,13 +224,13 @@
 - Important:
     - Locust scripts must be present in all the master and worker machines
     - number_of_users > number_of_user_classes * number_of_workers
-
+-----
 ### Running Locust in Docker
 - docker run -p 8089:8089 -v $PWD:/mnt/locust -d locustio/locust -f /mnt/locust/locustfile.py
 - docker run -v$PWD:/mnt/locust locustio/locust -f /mnt/locust/locustfile.py html /mnt/locust/myrun1.html --headless --only-summary -r1-u1-t 10s
 - docker ps
 - docker exec -it {container_id}/bin/bash
-
+-----
 ### Distributed Load Testing in Docker
 - We need to docker compose to run and build the images
 - We need to defien containers and conf in yml file
