@@ -112,4 +112,6 @@
 - test data in seperate file/python file/third party library
 
 ### Correlation in Locust
-- 
+- extracting the dynamic value from the response
+- pass the extracted value in the subsequent requests
+- Regular expressions, parsers
