@@ -1,6 +1,6 @@
 ## Learning Locust
 ### Starting with locust:
-- Learning series: https://www.youtube.com/playlist?list=PLJ9A48W0kpRKMCzJARCObgJs3SinOewp5
+- Tutorial series: https://www.youtube.com/playlist?list=PLJ9A48W0kpRKMCzJARCObgJs3SinOewp5
 - Main file:  create a python file
 - To run with the web UI, run with following command: locust or locust -f filename.py
 - For direct command line usage use: locust --headless --users 10 --spawn-rate 1 -H https://oceanready-personalinfo-ui.prod.ocean.com/ {http://your-server.com}
