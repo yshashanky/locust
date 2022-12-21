@@ -1,4 +1,4 @@
-## Learning Locust
+## Locust
 ### Starting with locust:
 - Main file:  create a python file
 - To run with the web UI, run with following command: locust or locust -f filename.py
