@@ -1,1865 +1,1974 @@
-# Kafka Transaction Enrichment Module
+# Kafka Streams Transaction Enrichment — Final Production Integration Guide
 
-Production-oriented skeleton for enriching T2/T3/T4 events with state captured from T1, using Kafka Streams persistent state, Avro/Schema Registry, transaction-ID repartitioning, durable retry, and terminal-state cleanup.
+## 1. Final assumptions from our discussion
 
-> **Important:** This is an integration skeleton, not a drop-in deployment. Replace the marked integration points with your existing Avro classes/SerDes, topic names, event fields, retry conventions, and existing producer/consumer contracts.
+This document is the corrected version based on the latest information.
 
-## 1. Target architecture
+### Application
+
+- Spring Boot: **3.5.13**
+- Kafka client: **3.9.2**
+- Kafka Streams: use the version compatible with the application's managed Kafka/Spring Kafka dependencies
+- Existing application already uses Kafka
+- Existing application currently has `@KafkaListener` + `@Async`
+- We are migrating this **specific transaction flow** to Kafka Streams
+- Existing unrelated `@Async` functionality can remain unchanged
+
+### Input/output data
+
+The main restricted/targeted Kafka producer is:
+
+```java
+KafkaTemplate<String, GenericRecord>
+```
+
+The DLQ producer is:
+
+```java
+KafkaTemplate<String, String>
+```
+
+Therefore, the main stream should remain:
+
+```java
+KStream<String, GenericRecord>
+```
+
+**Do not convert the main implementation to `Map<String,Object>` merely because the business code uses `put()` operations.**
+
+Your existing `GenericRecord` remains the business payload.
+
+### Transaction relationship
+
+The transaction ID is:
 
 ```text
-Existing Input Topic
-        |
-        v
-   Avro T1/T2/T3/T4
-        |
-        v
+KafkaTransaction.transaction_id
+```
+
+It is **not** the Kafka record key.
+
+Events are related using this payload field.
+
+Example:
+
+```text
+T1 → transaction_id = ABC123 → action = submit
+T2 → transaction_id = ABC123
+T3 → transaction_id = ABC123
+T4 → transaction_id = ABC123 → action = finished
+```
+
+### Event behavior
+
+- T1 has `action = submit`
+- T1 normally arrives first
+- T2/T3/T4 can very rarely arrive before T1
+- There can be more than four events
+- There is one terminal event
+- Terminal event has `action = finished`
+- T2/T3/T4/etc. must all be enriched using T1
+- T1 itself is the source of the complete data
+- T1 can remain relevant for days/weeks
+- 90 days is currently a provisional business retention boundary
+- Peak traffic: ~34,000 messages/hour ≈ **9.44 messages/sec**
+- Around 10,000 simultaneous active transactions
+- T1 payload is approximately 10–12 KB
+- Kafka listener concurrency in the old implementation is currently 1
+
+### External storage
+
+No:
+
+- Redis
+- database
+- external cache
+
+The durable state should be Kafka Streams' local state store backed by Kafka changelogging.
+
+---
+
+# 2. Final architecture
+
+The old flow is approximately:
+
+```text
+Input Kafka Topic
+      ↓
+KafkaListener
+      ↓
+@Async
+      ↓
+AsyncProcessingService
+      ↓
+Business transformation
+      ↓
+KafkaTemplate<String, GenericRecord>
+      ↓
+Output Kafka Topic
+```
+
+The new flow becomes:
+
+```text
+Input Kafka Topic
+      ↓
 Kafka Streams
-        |
-        | selectKey(transactionId)
-        v
-Internal repartition topic
-        |
-        +----------------------+
-        |                      |
-        v                      v
-       T1                  T2/T3/T4
-        |                      |
-        v                      v
-T1StateMapper             lookup T1 state
-        |                      |
-        v                      |
-Persistent State Store <-------+
-        |
-        +----> Kafka changelog (Kafka Streams managed)
-        |
-        v
-   Enrichment
-        |
-        +---- missing T1 --> durable retry topic --> retry processing
-        |
-        v
- Existing Output Topic
-
-Terminal event
-      |
-      v
-Delete transaction state
-```
-
-### Key design choices
-
-* The original Kafka record key is **not** used for correlation.
-* The Avro payload's `transactionId` becomes the **internal Kafka Streams key**.
-* Kafka Streams performs repartitioning when required for stateful processing.
-* There is one **logical** state store. Kafka Streams may physically partition it across tasks.
-* T1 state stores only the fields needed by later events, not necessarily the entire 10–12 KB T1.
-* State is persisted locally using Kafka Streams' persistent store and backed by a Kafka changelog.
-* No Redis, database, JVM `Map`, or unbounded in-memory waiting list is required.
-* A late/missing T1 must not be silently dropped. The skeleton uses a durable retry topic.
-* A terminal event removes state early; the retention/changelog policy remains a recovery safety mechanism.
-* The expected peak of 34,000 messages/hour (~9.4 messages/sec) and ~10,000 simultaneous active transactions is modest for this architecture, assuming the enrichment itself is not CPU-heavy.
-
----
-
-# 2. Directory structure
-
-```text
-src/
-└── main/
-    ├── avro/
-    │   └── TransactionEnrichmentState.avsc
-    │
-    ├── java/
-    │   └── com/
-    │       └── yourcompany/
-    │           └── enrichment/
-    │               ├── config/
-    │               │   ├── EnrichmentKafkaConfig.java
-    │               │   └── EnrichmentTopology.java
-    │               │
-    │               ├── constants/
-    │               │   └── EnrichmentConstants.java
-    │               │
-    │               ├── model/
-    │               │   ├── TransactionEvent.java
-    │               │   ├── T1State.java
-    │               │   └── EnrichedTransaction.java
-    │               │
-    │               ├── service/
-    │               │   ├── T1StateMapper.java
-    │               │   ├── TransactionEnrichmentService.java
-    │               │   └── RetryDecisionService.java
-    │               │
-    │               ├── transformer/
-    │               │   └── MissingT1RetryTransformer.java
-    │               │
-    │               └── serde/
-    │                   └── SerdeFactory.java
-    │
-    └── resources/
-        └── application.yml
+      ↓
+GenericRecord
+      ↓
+Extract transaction_id from payload
+      ↓
+selectKey(transaction_id)
+      ↓
+Kafka internal repartition topic
+      ↓
+Stateful Processor
+      │
+      ├── submit
+      │      ↓
+      │   save T1
+      │
+      ├── T2/T3/T4/...
+      │      ↓
+      │   lookup T1
+      │      ↓
+      │   enrich current GenericRecord
+      │
+      └── finished
+             ↓
+          lookup T1
+             ↓
+          enrich
+             ↓
+          delete state
+      ↓
+Existing transformation/business logic
+      ↓
+KStream<String, GenericRecord>
+      ↓
+Output Kafka Topic
 ```
 
 ---
 
-# 3. Maven dependencies
+# 3. Why Kafka Streams is the right solution
 
-Add the dependencies compatible with your Spring Boot dependency management.
+The key requirement is not simply asynchronous processing.
 
-```xml
-<dependencies>
+It is:
 
-    <!-- Existing application dependency, if not already present -->
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter</artifactId>
-    </dependency>
+> Keep T1 state available for an unknown amount of time and use it to enrich every later event belonging to the same transaction.
 
-    <!-- Spring Kafka -->
-    <dependency>
-        <groupId>org.springframework.kafka</groupId>
-        <artifactId>spring-kafka</artifactId>
-    </dependency>
+Kafka Streams provides:
 
-    <!-- Kafka Streams -->
-    <dependency>
-        <groupId>org.apache.kafka</groupId>
-        <artifactId>kafka-streams</artifactId>
-    </dependency>
+- persistent local state
+- Kafka-backed changelog
+- automatic state recovery
+- partition-local processing
+- state lookup by transaction ID
+- re-keying/repartitioning
+- controlled stream processing
+- no Redis/database requirement
 
-    <!-- Confluent Avro + Schema Registry -->
-    <!-- Use versions compatible with your existing Kafka/Confluent stack. -->
-    <dependency>
-        <groupId>io.confluent</groupId>
-        <artifactId>kafka-avro-serializer</artifactId>
-        <version>${confluent.version}</version>
-    </dependency>
-
-</dependencies>
-```
-
-If your application already has the Avro serializer/Schema Registry dependencies, **do not duplicate them**. Use the versions already managed by your application.
+At ~9.4 messages/sec peak, this workload is modest for Kafka Streams.
 
 ---
 
-# 4. Avro state schema
+# 4. What happens to the existing classes
 
-## Path
+## 4.1 `KafkaConsumerService`
 
-```text
-src/main/avro/TransactionEnrichmentState.avsc
-```
+### Current
 
-```json
-{
-  "type": "record",
-  "name": "TransactionEnrichmentState",
-  "namespace": "com.yourcompany.enrichment.avro",
-  "fields": [
-    {
-      "name": "transactionId",
-      "type": "string"
-    },
-    {
-      "name": "customerId",
-      "type": ["null", "string"],
-      "default": null
-    },
-    {
-      "name": "accountId",
-      "type": ["null", "string"],
-      "default": null
-    },
-    {
-      "name": "paymentId",
-      "type": ["null", "string"],
-      "default": null
-    },
-    {
-      "name": "amount",
-      "type": ["null", "double"],
-      "default": null
-    },
-    {
-      "name": "currency",
-      "type": ["null", "string"],
-      "default": null
-    }
-  ]
+Something similar to:
+
+```java
+@KafkaListener(
+    topics = "${...}",
+    concurrency = "1"
+)
+public void consume(...) {
+    asyncProcessingService.process(...);
 }
 ```
 
-**Do not copy this schema literally.** Add only fields from T1 that T2/T3/T4 actually require.
+### Final
 
-The generated Avro class is preferable to Java native serialization.
+For this particular transaction topic:
+
+```diff
+- @KafkaListener(...)
+- public void consume(...) {
+-     asyncProcessingService.process(...);
+- }
+
++ // Kafka Streams now owns consumption of this topic.
+```
+
+Do not leave both the old listener and Kafka Streams consuming the same input flow unless that is explicitly intended.
+
+Otherwise the two consumers will belong to different consumer groups and both may process the same events.
+
+### Keep the class if
+
+Other topics/features still use it.
 
 ---
 
-# 5. State-store logical table
+# 5. `AsyncProcessingService`
 
-There is no SQL table. The persistent state is a Kafka Streams key-value store.
+Do **not** immediately delete it.
+
+Separate its responsibilities into:
+
+### Infrastructure responsibilities — remove from this flow
+
+```text
+@Async
+CompletableFuture
+executor/thread-pool handling
+acknowledgement
+KafkaTemplate send
+```
+
+### Business responsibilities — retain/reuse
+
+```text
+transformation
+field mapping
+business rules
+output construction
+existing enrichment logic
+```
+
+The business portion should be exposed through a normal synchronous service/adapter.
+
+Example:
+
+```java
+@Component
+public class ExistingTransformationAdapter {
+
+    public GenericRecord transform(
+            GenericRecord enrichedRecord) {
+
+        // Move/reuse the actual business transformation
+        // currently present in AsyncProcessingService.
+
+        return enrichedRecord;
+    }
+}
+```
+
+Do not duplicate the business logic.
+
+---
+
+# 6. Existing async configuration
+
+If the application has:
+
+```yaml
+async:
+  core-pool-size: ...
+  max-pool-size: ...
+  queue-capacity: ...
+  thread-name-prefix: ...
+```
+
+do not remove it immediately.
+
+If other application components use it:
+
+```text
+KEEP
+```
+
+If it is used only by this transaction flow:
+
+```text
+REMOVE AFTER MIGRATION
+```
+
+It will no longer control Kafka Streams processing.
+
+Do **not** call `@Async` from the Kafka Streams processor.
+
+---
+
+# 7. Recommended package structure
+
+Use your existing root package.
+
+```text
+src/main/java/<your-package>/
+
+├── config/
+│   ├── KafkaStreamsConfig.java
+│   └── TransactionEnrichmentProperties.java
+│
+├── enrichment/
+│   ├── TransactionEnrichmentTopology.java
+│   ├── TransactionEnrichmentProcessor.java
+│   ├── TransactionEnricher.java
+│   ├── TransactionState.java
+│   ├── TransactionStateSerde.java
+│   ├── TransactionStateStoreNames.java
+│   └── MissingTransactionStateException.java
+│
+├── transformation/
+│   └── ExistingTransformationAdapter.java
+│
+└── existing/
+    ├── KafkaConsumerService.java
+    └── AsyncProcessingService.java
+```
+
+Use your actual package naming.
+
+---
+
+# 8. Dependencies
+
+Add Kafka Streams if it is not already transitively available:
+
+```xml
+<dependency>
+    <groupId>org.apache.kafka</groupId>
+    <artifactId>kafka-streams</artifactId>
+</dependency>
+```
+
+Keep your existing:
+
+```xml
+<dependency>
+    <groupId>org.springframework.kafka</groupId>
+    <artifactId>spring-kafka</artifactId>
+</dependency>
+```
+
+Do not manually force a Kafka Streams version that conflicts with Spring Boot's dependency management.
+
+---
+
+# 9. Important clarification about serialization
+
+You said that your current business code does not explicitly serialize/deserialize the payload.
+
+That is completely fine.
+
+Your current application likely hides serialization at the Spring Kafka/KafkaTemplate boundary.
+
+Your main producer is:
+
+```java
+KafkaTemplate<String, GenericRecord>
+```
+
+Therefore the final Kafka Streams flow should be:
+
+```text
+Kafka bytes
+    ↓
+existing/compatible GenericRecord Avro SerDe
+    ↓
+GenericRecord
+    ↓
+business processing
+    ↓
+GenericRecord
+    ↓
+existing/compatible GenericRecord Avro SerDe
+    ↓
+Kafka bytes
+```
+
+You do **not** need to manually call:
+
+```java
+serializer.serialize(...)
+deserializer.deserialize(...)
+```
+
+inside business code.
+
+However, Kafka Streams itself must have a SerDe because it directly consumes from and produces to Kafka.
+
+---
+
+# 10. Schema Registry
+
+Because your main producer uses:
+
+```java
+KafkaTemplate<String, GenericRecord>
+```
+
+the existing GenericRecord serializer configuration is important.
+
+Do **not** create a second unrelated Schema Registry setup.
+
+Reuse the existing application configuration if the same Avro/Schema Registry contract applies to this topic.
+
+The important rule is:
+
+```text
+Existing GenericRecord serialization configuration
+                    ↓
+        Kafka Streams boundary
+```
+
+The business enrichment code itself does not need to know about Schema Registry.
+
+---
+
+# 11. GenericRecord SerDe — integration point
+
+Create:
+
+```text
+src/main/java/<your-package>/config/GenericRecordSerdeProvider.java
+```
+
+The exact implementation depends on the serializer already used by your application.
+
+Do **not** invent a new serializer if you already have one.
 
 Conceptually:
 
-| Key | Value |
-|---|---|
-| `TX1001` | T1State for TX1001 |
-| `TX1002` | T1State for TX1002 |
-| `TX1003` | T1State for TX1003 |
+```java
+@Component
+public class GenericRecordSerdeProvider {
 
-The logical model is:
+    public Serde<GenericRecord> createSerde() {
 
-```text
-Key:
-    transactionId
+        /*
+         * TODO:
+         *
+         * Wire the exact GenericRecord Avro SerDe already used
+         * by the application's KafkaTemplate<String, GenericRecord>.
+         *
+         * If your producer currently uses:
+         *
+         * KafkaAvroSerializer
+         *
+         * configure the corresponding Kafka Streams SerDe using
+         * the same Schema Registry URL and serializer properties.
+         */
 
-Value:
-    TransactionEnrichmentState
-        customerId
-        accountId
-        paymentId
-        amount
-        currency
-        ...
+        throw new UnsupportedOperationException(
+                "Wire existing GenericRecord Avro SerDe here"
+        );
+    }
+}
 ```
 
-With ~10,000 simultaneously active transactions, this is expected to be a manageable state size, particularly if you store only required fields.
+### Why this is intentionally an integration point
 
-Physically, Kafka Streams can partition this logical state by task/partition. Your application does **not** manually manage those physical partitions.
+The exact serializer configuration depends on:
+
+- whether your current producer uses `KafkaAvroSerializer`
+- whether Schema Registry is Confluent
+- subject naming strategy
+- auto-register settings
+- authentication
+- existing serializer properties
+- whether the GenericRecord schema is the same for input and output
+
+Those values should be copied from your actual application configuration rather than guessed.
 
 ---
 
-# 6. Kafka topics
+# 12. Transaction state model
 
-## Existing topics
-
-```text
-EXISTING_INPUT_TOPIC
-    |
-    | T1/T2/T3/T4
-    v
-Kafka Streams
-    |
-    v
-EXISTING_OUTPUT_TOPIC
-```
-
-## Internal topics
-
-Kafka Streams may create internal topics for:
-
-1. **Repartitioning** after `selectKey(transactionId)`.
-2. **State-store changelog** for recovery.
-
-You should not treat these as application business topics.
-
-### Retry topic
-
-For a T2/T3/T4 arriving before its T1 state exists, use a durable retry mechanism.
-
-Recommended logical flow:
+Create:
 
 ```text
-T2/T3/T4
-    |
-    v
-T1 state found?
-    |
-    +---- YES ----> enrich -> output
-    |
-    +---- NO -----> retry topic
-                         |
-                         v
-                    retry consumer
-                         |
-                         v
-                   T1 now exists?
-                     /       \
-                   YES       NO
-                    |         |
-                    v         v
-                 enrich     retry/DLQ
-```
-
-For production, create the retry topic with a bounded retry policy and a DLQ. Do not keep missing events in JVM memory.
-
----
-
-# 7. Constants
-
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/constants/EnrichmentConstants.java
+src/main/java/<your-package>/enrichment/TransactionState.java
 ```
 
 ```java
-package com.yourcompany.enrichment.constants;
+package <your-package>.enrichment;
 
-public final class EnrichmentConstants {
+import org.apache.avro.generic.GenericRecord;
 
-    private EnrichmentConstants() {
+public class TransactionState {
+
+    private String transactionId;
+
+    /*
+     * T1 contains the complete data required for subsequent enrichment.
+     *
+     * Initially this can hold the full T1 GenericRecord.
+     *
+     * Later, if only a subset is required, replace this with a
+     * compact state model to reduce state-store/changelog size.
+     */
+    private GenericRecord t1Record;
+
+    private long createdAtEpochMs;
+
+    private long lastUpdatedEpochMs;
+
+    public String getTransactionId() {
+        return transactionId;
     }
 
-    public static final String INPUT_TOPIC =
-            "YOUR_EXISTING_INPUT_TOPIC";
+    public void setTransactionId(String transactionId) {
+        this.transactionId = transactionId;
+    }
 
-    public static final String OUTPUT_TOPIC =
-            "YOUR_EXISTING_OUTPUT_TOPIC";
+    public GenericRecord getT1Record() {
+        return t1Record;
+    }
 
-    public static final String RETRY_TOPIC =
-            "YOUR_ENRICHMENT_RETRY_TOPIC";
+    public void setT1Record(GenericRecord t1Record) {
+        this.t1Record = t1Record;
+    }
 
-    public static final String DLQ_TOPIC =
-            "YOUR_ENRICHMENT_DLQ_TOPIC";
+    public long getCreatedAtEpochMs() {
+        return createdAtEpochMs;
+    }
 
-    public static final String APPLICATION_ID =
-            "transaction-enrichment-stream";
+    public void setCreatedAtEpochMs(long createdAtEpochMs) {
+        this.createdAtEpochMs = createdAtEpochMs;
+    }
+
+    public long getLastUpdatedEpochMs() {
+        return lastUpdatedEpochMs;
+    }
+
+    public void setLastUpdatedEpochMs(long lastUpdatedEpochMs) {
+        this.lastUpdatedEpochMs = lastUpdatedEpochMs;
+    }
+}
+```
+
+---
+
+# 13. State store name
+
+Create:
+
+```text
+src/main/java/<your-package>/enrichment/TransactionStateStoreNames.java
+```
+
+```java
+package <your-package>.enrichment;
+
+public final class TransactionStateStoreNames {
+
+    private TransactionStateStoreNames() {
+    }
 
     public static final String T1_STATE_STORE =
             "transaction-t1-state-store";
 }
 ```
 
-In the final application, move these to configuration rather than hardcoding them.
+---
+
+# 14. State store serialization
+
+The state store itself needs a SerDe.
+
+This is different from your existing KafkaTemplate producer.
+
+The state is persisted locally and backed up through Kafka's changelog.
+
+For a first implementation:
+
+```text
+TransactionState
+    ↓
+JSON/binary state SerDe
+    ↓
+RocksDB/local state store
+    ↓
+Kafka changelog
+```
+
+A production implementation should use a deterministic serialization format.
+
+Because `TransactionState` contains `GenericRecord`, the safest final approach is to use a proper binary/Avro representation or a custom serializer that preserves the GenericRecord schema.
+
+Do not blindly use Jackson against arbitrary `GenericRecord`.
+
+Create:
+
+```text
+src/main/java/<your-package>/enrichment/TransactionStateSerde.java
+```
+
+and wire a proper state representation according to the actual schema.
 
 ---
 
-# 8. Transaction event abstraction
+# 15. Enrichment class
 
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/model/TransactionEvent.java
-```
-
-```java
-package com.yourcompany.enrichment.model;
-
-/**
- * Skeleton only.
- *
- * In the real application, replace this with your existing Avro
- * GenericRecord or generated SpecificRecord.
- */
-public class TransactionEvent {
-
-    private String transactionId;
-    private String eventType;
-    private String eventId;
-    private Long eventTimestamp;
-
-    // Replace with your actual event/payload model.
-    private Object payload;
-
-    public TransactionEvent() {
-    }
-
-    public String getTransactionId() {
-        return transactionId;
-    }
-
-    public void setTransactionId(String transactionId) {
-        this.transactionId = transactionId;
-    }
-
-    public String getEventType() {
-        return eventType;
-    }
-
-    public void setEventType(String eventType) {
-        this.eventType = eventType;
-    }
-
-    public String getEventId() {
-        return eventId;
-    }
-
-    public void setEventId(String eventId) {
-        this.eventId = eventId;
-    }
-
-    public Long getEventTimestamp() {
-        return eventTimestamp;
-    }
-
-    public void setEventTimestamp(Long eventTimestamp) {
-        this.eventTimestamp = eventTimestamp;
-    }
-
-    public Object getPayload() {
-        return payload;
-    }
-
-    public void setPayload(Object payload) {
-        this.payload = payload;
-    }
-}
-```
-
-If your current application already uses `GenericRecord`, don't create this duplicate model just to follow the example. Use your actual Avro type.
-
----
-
-# 9. T1 state
-
-## Path
+Create:
 
 ```text
-src/main/java/com/yourcompany/enrichment/model/T1State.java
+src/main/java/<your-package>/enrichment/TransactionEnricher.java
 ```
+
+This is intentionally separate because you will provide the actual enrichment rules.
 
 ```java
-package com.yourcompany.enrichment.model;
+package <your-package>.enrichment;
 
-import java.math.BigDecimal;
-
-/**
- * If Avro code generation is used, this Java model can be replaced
- * by the generated Avro TransactionEnrichmentState class.
- */
-public class T1State {
-
-    private String transactionId;
-
-    private String customerId;
-    private String accountId;
-    private String paymentId;
-
-    private BigDecimal amount;
-    private String currency;
-
-    public T1State() {
-    }
-
-    public String getTransactionId() {
-        return transactionId;
-    }
-
-    public void setTransactionId(String transactionId) {
-        this.transactionId = transactionId;
-    }
-
-    public String getCustomerId() {
-        return customerId;
-    }
-
-    public void setCustomerId(String customerId) {
-        this.customerId = customerId;
-    }
-
-    public String getAccountId() {
-        return accountId;
-    }
-
-    public void setAccountId(String accountId) {
-        this.accountId = accountId;
-    }
-
-    public String getPaymentId() {
-        return paymentId;
-    }
-
-    public void setPaymentId(String paymentId) {
-        this.paymentId = paymentId;
-    }
-
-    public BigDecimal getAmount() {
-        return amount;
-    }
-
-    public void setAmount(BigDecimal amount) {
-        this.amount = amount;
-    }
-
-    public String getCurrency() {
-        return currency;
-    }
-
-    public void setCurrency(String currency) {
-        this.currency = currency;
-    }
-}
-```
-
----
-
-# 10. Enriched output model
-
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/model/EnrichedTransaction.java
-```
-
-```java
-package com.yourcompany.enrichment.model;
-
-/**
- * Skeleton.
- *
- * In your implementation this will likely be your existing Avro
- * output record rather than a new Java object.
- */
-public class EnrichedTransaction {
-
-    private String transactionId;
-    private String eventType;
-
-    private Object payload;
-
-    public EnrichedTransaction() {
-    }
-
-    public String getTransactionId() {
-        return transactionId;
-    }
-
-    public void setTransactionId(String transactionId) {
-        this.transactionId = transactionId;
-    }
-
-    public String getEventType() {
-        return eventType;
-    }
-
-    public void setEventType(String eventType) {
-        this.eventType = eventType;
-    }
-
-    public Object getPayload() {
-        return payload;
-    }
-
-    public void setPayload(Object payload) {
-        this.payload = payload;
-    }
-}
-```
-
----
-
-# 11. T1 state mapper
-
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/service/T1StateMapper.java
-```
-
-```java
-package com.yourcompany.enrichment.service;
-
-import com.yourcompany.enrichment.model.T1State;
-import com.yourcompany.enrichment.model.TransactionEvent;
-
+import org.apache.avro.generic.GenericRecord;
 import org.springframework.stereotype.Component;
 
 @Component
-public class T1StateMapper {
+public class TransactionEnricher {
 
-    public T1State map(TransactionEvent event) {
-
-        if (event == null) {
-            throw new IllegalArgumentException("T1 event cannot be null");
-        }
-
-        if (event.getTransactionId() == null ||
-                event.getTransactionId().isBlank()) {
-
-            throw new IllegalArgumentException(
-                    "T1 transactionId cannot be null/blank"
-            );
-        }
-
-        T1State state = new T1State();
-
-        state.setTransactionId(event.getTransactionId());
+    public GenericRecord enrich(
+            GenericRecord currentEvent,
+            GenericRecord t1Record) {
 
         /*
          * TODO:
          *
-         * Extract ONLY the fields required to enrich T2/T3/T4.
+         * Implement your exact T1 → current-event mapping.
          *
          * Example:
          *
-         * state.setCustomerId(
-         *     extractString(event, "customerId")
+         * currentEvent.put(
+         *     "customer_id",
+         *     t1Record.get("customer_id")
          * );
          *
-         * state.setAccountId(...);
-         * state.setPaymentId(...);
-         * state.setAmount(...);
-         * state.setCurrency(...);
+         * currentEvent.put(
+         *     "payment_details",
+         *     t1Record.get("payment_details")
+         * );
          */
 
-        return state;
+        return currentEvent;
     }
 }
 ```
 
----
+### Critical rule
 
-# 12. Enrichment service
-
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/service/TransactionEnrichmentService.java
-```
-
-```java
-package com.yourcompany.enrichment.service;
-
-import com.yourcompany.enrichment.model.T1State;
-import com.yourcompany.enrichment.model.TransactionEvent;
-
-import org.springframework.stereotype.Service;
-
-/**
- * Stateless business logic.
- *
- * IMPORTANT:
- * Do not add a Map/cache/list of transactions here.
- * Kafka Streams owns the persistent state.
- */
-@Service
-public class TransactionEnrichmentService {
-
-    public TransactionEvent enrich(
-            TransactionEvent event,
-            T1State state) {
-
-        if (event == null) {
-            return null;
-        }
-
-        if (state == null) {
-            throw new MissingT1StateException(
-                    event.getTransactionId()
-            );
-        }
-
-        /*
-         * TODO:
-         *
-         * Populate the current T2/T3/T4 event from T1 state.
-         *
-         * Example:
-         *
-         * setField(event, "customerId", state.getCustomerId());
-         * setField(event, "accountId", state.getAccountId());
-         * setField(event, "amount", state.getAmount());
-         */
-
-        return event;
-    }
-}
-```
-
----
-
-# 13. Missing T1 exception
-
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/service/MissingT1StateException.java
-```
-
-```java
-package com.yourcompany.enrichment.service;
-
-public class MissingT1StateException extends RuntimeException {
-
-    public MissingT1StateException(String transactionId) {
-        super("T1 state not found for transactionId=" + transactionId);
-    }
-}
-```
-
----
-
-# 14. Retry decision service
-
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/service/RetryDecisionService.java
-```
-
-```java
-package com.yourcompany.enrichment.service;
-
-import com.yourcompany.enrichment.model.TransactionEvent;
-
-import org.springframework.stereotype.Component;
-
-@Component
-public class RetryDecisionService {
-
-    /*
-     * Keep retry policy bounded.
-     *
-     * Do not retry forever.
-     */
-    private static final int MAX_RETRIES = 5;
-
-    public boolean shouldRetry(TransactionEvent event) {
-
-        int retryCount = extractRetryCount(event);
-
-        return retryCount < MAX_RETRIES;
-    }
-
-    public int extractRetryCount(TransactionEvent event) {
-
-        /*
-         * TODO:
-         *
-         * Read retry count from your event/header/envelope.
-         *
-         * Return 0 when this is the first attempt.
-         */
-        return 0;
-    }
-
-    public TransactionEvent incrementRetryCount(
-            TransactionEvent event) {
-
-        /*
-         * TODO:
-         *
-         * Increment retry metadata in the format your
-         * existing application uses.
-         */
-        return event;
-    }
-}
-```
-
----
-
-# 15. Kafka Streams configuration
-
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/config/EnrichmentKafkaConfig.java
-```
-
-```java
-package com.yourcompany.enrichment.config;
-
-import com.yourcompany.enrichment.constants.EnrichmentConstants;
-
-import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.streams.StreamsConfig;
-
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-
-import org.springframework.kafka.config.KafkaStreamsConfiguration;
-import org.springframework.kafka.config.KafkaStreamsDefaultConfiguration;
-
-import java.util.HashMap;
-import java.util.Map;
-
-@Configuration
-public class EnrichmentKafkaConfig {
-
-    @Value("${spring.kafka.bootstrap-servers}")
-    private String bootstrapServers;
-
-    @Value("${spring.kafka.properties.schema.registry.url}")
-    private String schemaRegistryUrl;
-
-    @Bean(
-        name = KafkaStreamsDefaultConfiguration
-                .DEFAULT_STREAMS_CONFIG_BEAN_NAME
-    )
-    public KafkaStreamsConfiguration kafkaStreamsConfiguration() {
-
-        Map<String, Object> props = new HashMap<>();
-
-        props.put(
-                StreamsConfig.APPLICATION_ID_CONFIG,
-                EnrichmentConstants.APPLICATION_ID
-        );
-
-        props.put(
-                StreamsConfig.BOOTSTRAP_SERVERS_CONFIG,
-                bootstrapServers
-        );
-
-        /*
-         * Internal Kafka Streams key after selectKey().
-         */
-        props.put(
-                StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG,
-                Serdes.String().getClass()
-        );
-
-        /*
-         * State is persisted locally.
-         *
-         * IMPORTANT:
-         * Use a persistent disk volume in production.
-         */
-        props.put(
-                StreamsConfig.STATE_DIR_CONFIG,
-                "/var/lib/app/kafka-streams"
-        );
-
-        /*
-         * Placeholder.
-         *
-         * Tune based on the actual partition count and deployment
-         * topology.
-         */
-        props.put(
-                StreamsConfig.NUM_STREAM_THREADS_CONFIG,
-                1
-        );
-
-        /*
-         * Use the guarantee appropriate for your Kafka cluster and
-         * current producer semantics.
-         *
-         * Start with at-least-once unless exactly-once has been
-         * explicitly validated in your environment.
-         */
-        props.put(
-                StreamsConfig.PROCESSING_GUARANTEE_CONFIG,
-                StreamsConfig.AT_LEAST_ONCE
-        );
-
-        /*
-         * Internal topic replication.
-         *
-         * Requires broker/environment support.
-         */
-        props.put(
-                StreamsConfig.REPLICATION_FACTOR_CONFIG,
-                3
-        );
-
-        /*
-         * Bounded internal cache.
-         *
-         * This is NOT the transaction state store.
-         */
-        props.put(
-                StreamsConfig.STATESTORE_CACHE_MAX_BYTES_CONFIG,
-                10 * 1024 * 1024L
-        );
-
-        /*
-         * Commit frequency.
-         *
-         * Tune with load testing.
-         */
-        props.put(
-                StreamsConfig.COMMIT_INTERVAL_MS_CONFIG,
-                100
-        );
-
-        /*
-         * Avro / Schema Registry.
-         *
-         * Your existing serializer configuration can be merged here.
-         */
-        props.put(
-                "schema.registry.url",
-                schemaRegistryUrl
-        );
-
-        return new KafkaStreamsConfiguration(props);
-    }
-}
-```
-
----
-
-# 16. Avro SerDes factory
-
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/serde/SerdeFactory.java
-```
-
-```java
-package com.yourcompany.enrichment.serde;
-
-import io.confluent.kafka.streams.serdes.avro.GenericAvroSerde;
-
-import org.apache.kafka.common.serialization.Serde;
-
-import java.util.Map;
-
-public final class SerdeFactory {
-
-    private SerdeFactory() {
-    }
-
-    public static Serde<Object> genericAvroSerde(
-            String schemaRegistryUrl) {
-
-        GenericAvroSerde serde = new GenericAvroSerde();
-
-        serde.configure(
-                Map.of(
-                        "schema.registry.url",
-                        schemaRegistryUrl
-                ),
-                false
-        );
-
-        return (Serde<Object>) (Serde<?>) serde;
-    }
-}
-```
-
-### Note
-
-If your current application already has correctly configured Avro SerDes, **reuse those** instead of introducing another factory.
-
-The exact type should match your existing `GenericRecord`/SpecificRecord setup.
-
----
-
-# 17. Main Kafka Streams topology
-
-## Path
-
-```text
-src/main/java/com/yourcompany/enrichment/config/EnrichmentTopology.java
-```
-
-```java
-package com.yourcompany.enrichment.config;
-
-import com.yourcompany.enrichment.constants.EnrichmentConstants;
-import com.yourcompany.enrichment.model.T1State;
-import com.yourcompany.enrichment.model.TransactionEvent;
-import com.yourcompany.enrichment.service.T1StateMapper;
-import com.yourcompany.enrichment.service.TransactionEnrichmentService;
-
-import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.common.utils.Bytes;
-
-import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.kstream.Consumed;
-import org.apache.kafka.streams.kstream.Grouped;
-import org.apache.kafka.streams.kstream.Joined;
-import org.apache.kafka.streams.kstream.KStream;
-import org.apache.kafka.streams.kstream.KTable;
-import org.apache.kafka.streams.kstream.Materialized;
-import org.apache.kafka.streams.kstream.Produced;
-import org.apache.kafka.streams.state.KeyValueStore;
-
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-
-@Configuration
-public class EnrichmentTopology {
-
-    private final T1StateMapper t1StateMapper;
-    private final TransactionEnrichmentService enrichmentService;
-
-    public EnrichmentTopology(
-            T1StateMapper t1StateMapper,
-            TransactionEnrichmentService enrichmentService) {
-
-        this.t1StateMapper = t1StateMapper;
-        this.enrichmentService = enrichmentService;
-    }
-
-    @Bean
-    public KStream<String, TransactionEvent>
-    transactionEnrichmentStream(
-            StreamsBuilder builder) {
-
-        /*
-         * ========================================================
-         * 1. Read existing topic.
-         * ========================================================
-         */
-
-        KStream<String, TransactionEvent> input =
-                builder.stream(
-                        EnrichmentConstants.INPUT_TOPIC,
-                        Consumed.with(
-                                Serdes.String(),
-
-                                /*
-                                 * TODO:
-                                 * Replace with your actual Avro
-                                 * event serde.
-                                 */
-                                transactionEventSerde()
-                        )
-                );
-
-
-        /*
-         * ========================================================
-         * 2. Re-key by BUSINESS TRANSACTION ID.
-         *
-         * The original Kafka key is irrelevant to correlation.
-         *
-         * After this:
-         *
-         * TX123 -> T1
-         * TX123 -> T2
-         * TX123 -> T3
-         * TX123 -> T4
-         *
-         * Kafka Streams will create/use a repartition topic when
-         * required by downstream stateful processing.
-         * ========================================================
-         */
-
-        KStream<String, TransactionEvent> transactionStream =
-                input.selectKey(
-                        (originalKey, event) ->
-                                event.getTransactionId()
-                );
-
-
-        /*
-         * ========================================================
-         * 3. T1 stream.
-         * ========================================================
-         */
-
-        KStream<String, TransactionEvent> t1Stream =
-                transactionStream.filter(
-                        (key, event) ->
-                                event != null
-                                        && isT1(event)
-                        );
-
-
-        /*
-         * ========================================================
-         * 4. Subsequent events.
-         * ========================================================
-         */
-
-        KStream<String, TransactionEvent> subsequentStream =
-                transactionStream.filter(
-                        (key, event) ->
-                                event != null
-                                        && !isT1(event)
-                        );
-
-
-        /*
-         * ========================================================
-         * 5. Convert T1 into the compact state representation.
-         * ========================================================
-         */
-
-        KTable<String, T1State> t1StateTable =
-                t1Stream
-                        .mapValues(
-                                t1StateMapper::map
-                        )
-                        .toTable(
-                                Materialized
-                                        .<String, T1State,
-                                                KeyValueStore<
-                                                        Bytes, byte[]>>as(
-                                                EnrichmentConstants
-                                                        .T1_STATE_STORE
-                                        )
-                                        .withKeySerde(
-                                                Serdes.String()
-                                        )
-                                        .withValueSerde(
-                                                t1StateSerde()
-                                        )
-                        );
-
-
-        /*
-         * ========================================================
-         * 6. Enrich T2/T3/T4 using T1 state.
-         *
-         * IMPORTANT:
-         * A normal KTable join does not wait indefinitely for a
-         * missing T1. Therefore the production implementation
-         * needs a durable retry/reprocessing path for missing T1.
-         *
-         * This join is the fast path for the normal case.
-         * ========================================================
-         */
-
-        KStream<String, TransactionEvent> enriched =
-                subsequentStream.join(
-                        t1StateTable,
-
-                        (event, t1State) ->
-                                enrichmentService.enrich(
-                                        event,
-                                        t1State
-                                ),
-
-                        Joined.with(
-                                Serdes.String(),
-                                transactionEventSerde(),
-                                t1StateSerde()
-                        )
-                );
-
-
-        /*
-         * ========================================================
-         * 7. Existing output topic.
-         * ========================================================
-         */
-
-        enriched.to(
-                EnrichmentConstants.OUTPUT_TOPIC,
-                Produced.with(
-                        Serdes.String(),
-                        transactionEventSerde()
-                )
-        );
-
-        return enriched;
-    }
-
-
-    private boolean isT1(TransactionEvent event) {
-
-        return "T1".equals(event.getEventType());
-    }
-
-
-    private org.apache.kafka.common.serialization.Serde<
-            TransactionEvent> transactionEventSerde() {
-
-        /*
-         * TODO:
-         *
-         * Return your existing Avro GenericRecord/SpecificRecord
-         * serde.
-         */
-        throw new UnsupportedOperationException(
-                "Integrate existing transaction Avro serde"
-        );
-    }
-
-
-    private org.apache.kafka.common.serialization.Serde<T1State>
-    t1StateSerde() {
-
-        /*
-         * TODO:
-         *
-         * Prefer generated Avro TransactionEnrichmentState +
-         * appropriate Avro serde in production.
-         */
-        throw new UnsupportedOperationException(
-                "Integrate T1 state Avro serde"
-        );
-    }
-}
-```
-
----
-
-# 18. Important limitation of the simple join
-
-The code above represents the **normal fast path**:
+T2, T3, T4 and any later event are enriched from:
 
 ```text
 T1
- ↓
-state materialized
- ↓
-T2
- ↓
-join
- ↓
-enriched output
 ```
 
-But this:
+not from:
 
 ```text
-T2
- ↓
-T1 not yet materialized
+T1 → T2 → T3
 ```
 
-must not disappear.
-
-A KTable join is not a "wait until T1 exists" operation.
-
-Therefore, use the following production pattern.
+The state remains the original T1 source.
 
 ---
 
-# 19. Durable missing-T1 retry
+# 16. Existing transformation adapter
 
-## Recommended flow
-
-```text
-                    T2/T3/T4
-                         |
-                         v
-                  T1 state exists?
-                    /          \
-                  YES          NO
-                   |            |
-                   v            v
-                Enrich      Retry Topic
-                   |            |
-                   v            v
-                Output       Retry delay
-                                |
-                                v
-                          Check T1 again
-                                |
-                       +--------+--------+
-                       |                 |
-                      YES               NO
-                       |                 |
-                       v                 v
-                    Enrich            retry again
-                                      /       \
-                                   limit      limit
-                                    not         hit
-                                   hit          |
-                                    |           v
-                                    +--------> DLQ
-```
-
-The retry topic should carry:
+Create:
 
 ```text
-transactionId
-eventId
-eventType
-original Avro payload
-retryCount
-firstSeenTimestamp
-lastRetryTimestamp
+src/main/java/<your-package>/transformation/ExistingTransformationAdapter.java
 ```
-
-Do **not** put waiting events into:
 
 ```java
-Map<String, List<TransactionEvent>>
-```
+package <your-package>.transformation;
 
-or an executor queue.
+import org.apache.avro.generic.GenericRecord;
+import org.springframework.stereotype.Component;
+
+@Component
+public class ExistingTransformationAdapter {
+
+    public GenericRecord transform(
+            GenericRecord enrichedRecord) {
+
+        /*
+         * TODO:
+         *
+         * Call/move the business transformation logic currently
+         * present in AsyncProcessingService.
+         */
+
+        return enrichedRecord;
+    }
+}
+```
 
 ---
 
-# 20. Retry topic implementation options
+# 17. Processor
 
-There are two good ways to implement this.
-
-### Option A: Existing retry infrastructure
-
-If your application already has retry/DLT infrastructure, **reuse it**.
-
-This is preferred.
-
-### Option B: Kafka retry topics
-
-Create something such as:
+Create:
 
 ```text
-transaction-enrichment-retry-1
-transaction-enrichment-retry-2
-transaction-enrichment-retry-3
-transaction-enrichment-dlt
+src/main/java/<your-package>/enrichment/TransactionEnrichmentProcessor.java
 ```
-
-with controlled delays/backoff.
-
-The exact retry implementation depends on whether your current application already uses Spring Kafka's retry-topic support.
-
----
-
-# 21. Terminal event
-
-Add this logic to the final topology/business flow.
 
 Conceptually:
 
 ```java
-if (isTerminalEvent(event)) {
-    deleteTransactionState(event.getTransactionId());
+package <your-package>.enrichment;
+
+import org.apache.avro.generic.GenericRecord;
+import org.apache.kafka.streams.processor.api.ContextualProcessor;
+import org.apache.kafka.streams.processor.api.ProcessorContext;
+import org.apache.kafka.streams.processor.api.Record;
+import org.apache.kafka.streams.state.KeyValueStore;
+
+public class TransactionEnrichmentProcessor
+        extends ContextualProcessor<
+                String,
+                GenericRecord,
+                String,
+                GenericRecord> {
+
+    private final String stateStoreName;
+    private final TransactionEnricher enricher;
+
+    private KeyValueStore<String, TransactionState> stateStore;
+
+    public TransactionEnrichmentProcessor(
+            String stateStoreName,
+            TransactionEnricher enricher) {
+
+        this.stateStoreName = stateStoreName;
+        this.enricher = enricher;
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public void init(
+            ProcessorContext<String, GenericRecord> context) {
+
+        super.init(context);
+
+        this.stateStore =
+                (KeyValueStore<String, TransactionState>)
+                        context.getStateStore(stateStoreName);
+    }
+
+    @Override
+    public void process(
+            Record<String, GenericRecord> record) {
+
+        GenericRecord event = record.value();
+
+        if (event == null) {
+            return;
+        }
+
+        String transactionId =
+                requiredString(
+                        event,
+                        "transaction_id"
+                );
+
+        String action =
+                requiredString(
+                        event,
+                        "action"
+                );
+
+        if ("submit".equalsIgnoreCase(action)) {
+
+            saveT1(
+                    transactionId,
+                    event
+            );
+
+            /*
+             * T1 can now continue through the existing output
+             * transformation path.
+             */
+            context().forward(record);
+
+            return;
+        }
+
+        TransactionState state =
+                stateStore.get(transactionId);
+
+        if (state == null) {
+
+            /*
+             * DO NOT publish an incomplete event.
+             *
+             * The production implementation should route this
+             * into durable pending-event handling.
+             */
+            throw new MissingTransactionStateException(
+                    transactionId,
+                    action
+            );
+        }
+
+        GenericRecord enriched =
+                enricher.enrich(
+                        event,
+                        state.getT1Record()
+                );
+
+        context().forward(
+                record.withValue(enriched)
+        );
+
+        if ("finished".equalsIgnoreCase(action)) {
+
+            stateStore.delete(transactionId);
+
+        } else {
+
+            state.setLastUpdatedEpochMs(
+                    System.currentTimeMillis()
+            );
+
+            stateStore.put(
+                    transactionId,
+                    state
+            );
+        }
+    }
+
+    private void saveT1(
+            String transactionId,
+            GenericRecord t1) {
+
+        long now =
+                System.currentTimeMillis();
+
+        TransactionState state =
+                new TransactionState();
+
+        state.setTransactionId(transactionId);
+        state.setT1Record(t1);
+        state.setCreatedAtEpochMs(now);
+        state.setLastUpdatedEpochMs(now);
+
+        stateStore.put(
+                transactionId,
+                state
+        );
+    }
+
+    private String requiredString(
+            GenericRecord record,
+            String field) {
+
+        Object value =
+                record.get(field);
+
+        if (value == null) {
+
+            throw new IllegalArgumentException(
+                    "Required field '" +
+                    field +
+                    "' is missing"
+            );
+        }
+
+        return value.toString();
+    }
 }
 ```
 
-The exact state deletion implementation depends on whether you use a KTable topology or a directly accessed `ReadOnlyKeyValueStore`.
-
-Do not leave completed transactions in the store for 90 days if you already know they are terminal.
-
 ---
 
-# 22. application.yml
+# 18. Missing T1
 
-## Path
+Create:
 
 ```text
-src/main/resources/application.yml
+src/main/java/<your-package>/enrichment/MissingTransactionStateException.java
 ```
-
-```yaml
-spring:
-
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
-
-    properties:
-      schema.registry.url: ${SCHEMA_REGISTRY_URL}
-
-    streams:
-
-      application-id: transaction-enrichment-stream
-
-      properties:
-
-        # Start with at-least-once unless exactly-once is required
-        # and validated in your environment.
-        processing.guarantee: at_least_once
-
-        # Persistent state location.
-        # IMPORTANT: production deployment must provide persistent
-        # local disk with enough capacity.
-        state.dir: ${KAFKA_STREAMS_STATE_DIR:/var/lib/app/kafka-streams}
-
-        # Internal topic replication.
-        replication.factor: 3
-
-        # Start conservatively; tune after partition count is known.
-        num.stream.threads: 1
-
-        # Kafka Streams internal cache.
-        # This is bounded memory and is NOT the T1 state store.
-        cache.max.bytes.buffering: 10485760
-
-        # Commit interval; tune with load testing.
-        commit.interval.ms: 100
-
-        # Keep state store/changelog behavior aligned with your
-        # Kafka cluster policies.
-```
-
----
-
-# 23. Memory-safety rules
-
-These are mandatory for this design.
-
-### Never do this
 
 ```java
-private final Map<String, T1State> cache =
-        new ConcurrentHashMap<>();
+package <your-package>.enrichment;
+
+public class MissingTransactionStateException
+        extends RuntimeException {
+
+    public MissingTransactionStateException(
+            String transactionId,
+            String action) {
+
+        super(
+                "T1 state not available for transactionId="
+                        + transactionId
+                        + ", action="
+                        + action
+        );
+    }
+}
 ```
 
-### Never do this
+## Important
+
+This exception is **not the final production solution** for the rare:
+
+```text
+T2 → T1
+```
+
+case.
+
+We must not lose T2.
+
+The final implementation should use durable Kafka-backed pending-event handling.
+
+Do not use:
 
 ```java
-private final List<TransactionEvent> waitingEvents =
-        new ArrayList<>();
+ConcurrentHashMap
+List<GenericRecord>
+Thread.sleep()
+CompletableFuture.delayedExecutor()
 ```
 
-### Never do this
+for this.
+
+---
+
+# 19. Topology
+
+Create:
+
+```text
+src/main/java/<your-package>/enrichment/TransactionEnrichmentTopology.java
+```
+
+The topology should conceptually be:
 
 ```java
-executor.submit(() -> {
-    // unlimited event backlog
-});
+@Configuration
+public class TransactionEnrichmentTopology {
+
+    @Bean
+    public KStream<String, GenericRecord> transactionStream(
+            StreamsBuilder builder,
+            GenericRecordSerdeProvider serdeProvider,
+            TransactionEnricher enricher,
+            ExistingTransformationAdapter transformationAdapter) {
+
+        Serde<GenericRecord> genericRecordSerde =
+                serdeProvider.createSerde();
+
+        KStream<String, GenericRecord> source =
+                builder.stream(
+                        inputTopic,
+                        Consumed.with(
+                                Serdes.String(),
+                                genericRecordSerde
+                        )
+                );
+
+        KStream<String, GenericRecord> keyed =
+                source.selectKey(
+                        (oldKey, event) -> {
+
+                            Object id =
+                                    event.get("transaction_id");
+
+                            if (id == null) {
+                                throw new IllegalArgumentException(
+                                        "transaction_id is missing"
+                                );
+                            }
+
+                            return id.toString();
+                        },
+                        Named.as("key-by-transaction-id")
+                );
+
+        /*
+         * Required because transaction_id is not currently
+         * the Kafka record key.
+         */
+        KStream<String, GenericRecord> repartitioned =
+                keyed.repartition(
+                        Repartitioned.with(
+                                Serdes.String(),
+                                genericRecordSerde
+                        ).withName(
+                                "transaction-id-repartition"
+                        )
+                );
+
+        /*
+         * Attach persistent state store.
+         */
+        // stateStoreBuilder = ...
+
+        KStream<String, GenericRecord> enriched =
+                repartitioned.process(
+                        () -> new TransactionEnrichmentProcessor(
+                                TransactionStateStoreNames
+                                        .T1_STATE_STORE,
+                                enricher
+                        ),
+                        Named.as("transaction-enrichment"),
+                        stateStoreBuilder
+                );
+
+        /*
+         * Existing business transformation.
+         */
+        KStream<String, GenericRecord> transformed =
+                enriched.mapValues(
+                        transformationAdapter::transform
+                );
+
+        transformed.to(
+                outputTopic,
+                Produced.with(
+                        Serdes.String(),
+                        genericRecordSerde
+                )
+        );
+
+        return source;
+    }
+}
 ```
 
-### Instead
+### Important
 
-```text
-Persistent state
-       +
-Kafka retry topic
-       +
-bounded Kafka Streams cache
-```
+The above is the structural skeleton.
 
-That means JVM heap is not your transaction database.
+The final implementation must wire the exact `GenericRecord` SerDe and `TransactionState` state-store SerDe from your project.
 
 ---
 
-# 24. State sizing
+# 20. Critical topology rule
 
-Your stated workload:
-
-```text
-Peak events/hour ≈ 34,000
-Peak events/sec  ≈ 9.4
-Active txns      ≈ 10,000
-T1 size          ≈ 10–12 KB
-```
-
-If only ~3 KB of each T1 is retained:
+Do not accidentally do:
 
 ```text
-10,000 × 3 KB
-≈ 30 MB raw state
+repartitioned
+    ├── processor
+    └── output
 ```
 
-Even if you retain the complete 12 KB:
+because that would send the un-enriched stream to the output.
+
+The correct flow is:
 
 ```text
-10,000 × 12 KB
-≈ 120 MB raw payload
-```
-
-The actual RocksDB disk footprint will be larger due to indexes, files, compaction, metadata, and temporary space, so size the disk with headroom.
-
-The important point is that you should size around **simultaneously active state**, not:
-
-```text
-34,000 messages/hour × 90 days
-```
-
-if terminal events remove state promptly.
-
----
-
-# 25. Why a single logical state store is okay
-
-Your application sees:
-
-```text
-transaction-t1-state-store
-
-TX001 -> T1State
-TX002 -> T1State
-TX003 -> T1State
-...
-TX10000 -> T1State
-```
-
-You don't create a separate store per partition.
-
-Kafka Streams internally distributes it according to its tasks.
-
-For example:
-
-```text
-Input topic
-P0 P1 P2 P3
-
-      |
-      v
-
-Kafka Streams
-
-Task 0 -> state for P0/P1
-Task 1 -> state for P2/P3
-```
-
-You don't manage this manually.
-
----
-
-# 26. Why transactionId must become the processing key
-
-Your current record might look like:
-
-```text
-Kafka key:
-    ABC-999
-
-Avro value:
-    transactionId = TX123
-    eventType = T2
-```
-
-T1 might be:
-
-```text
-Kafka key:
-    XYZ-111
-
-Avro value:
-    transactionId = TX123
-    eventType = T1
-```
-
-The existing Kafka keys don't correlate the transaction.
-
-Therefore:
-
-```java
-input.selectKey(
-    (key, event) -> event.getTransactionId()
-);
-```
-
-changes the internal processing key to:
-
-```text
-TX123 -> T1
-TX123 -> T2
-TX123 -> T3
-TX123 -> T4
-```
-
-Kafka Streams can then repartition by `TX123` for stateful processing.
-
----
-
-# 27. Important: re-keying does not modify your original input topic
-
-The original topic remains unchanged.
-
-You are effectively doing:
-
-```text
-Existing topic
-      |
-      v
-read original key/value
-      |
-      v
-selectKey(transactionId)
-      |
-      v
-internal repartition topic
-```
-
-The existing producer does not need to change just because the enrichment module internally re-keys.
-
----
-
-# 28. Async application integration
-
-Do not add another arbitrary `@Async` layer around Kafka Streams.
-
-Avoid:
-
-```text
-Kafka Streams
-     |
-     v
-@Async
-     |
-     v
-ThreadPoolTaskExecutor
-     |
-     v
-Enrichment
-```
-
-Prefer:
-
-```text
-Kafka Streams task
-     |
-     v
-T1 state lookup
-     |
-     v
-stateless enrichment
-     |
-     v
-Kafka output
-```
-
-Kafka Streams provides concurrency through:
-
-```text
-partitions
-+
-tasks
-+
-stream threads
-+
-application instances
-```
-
-If your existing application has a separate asynchronous business flow outside Kafka Streams, keep that isolated.
-
----
-
-# 29. Existing Avro/Schema Registry integration
-
-Since Schema Registry already exists, use it.
-
-Do not create a second local schema-management system unless your organization explicitly wants that.
-
-Recommended:
-
-```text
-Existing event schema
-        |
-        v
-Schema Registry
-
-TransactionEnrichmentState schema
-        |
-        v
-Schema Registry
-```
-
-The T1 state schema should be independently versioned and contain only the enrichment fields.
-
-If your existing application uses `GenericRecord`, the final implementation can use `GenericRecord` for both event and state. If you use generated `SpecificRecord`, use generated Avro classes.
-
----
-
-# 30. Production configuration still to be tuned
-
-Do not finalize these blindly:
-
-```text
-num.stream.threads
-processing.guarantee
-cache.max.bytes.buffering
-commit.interval.ms
-replication.factor
-retry count
-retry delay
-state disk size
-```
-
-The most important missing deployment input is the **input topic partition count**.
-
-For example:
-
-```text
-2 partitions
-4 partitions
-8 partitions
-12 partitions
-```
-
-changes the amount of useful parallelism.
-
-Your current traffic (~9.4 messages/sec peak) does not require a huge partition count, but partitions determine how much the application can scale horizontally.
-
----
-
-# 31. Production behavior for the normal case
-
-```text
-T1 TX100
- |
- +--> state store:
-      TX100 -> {customerId, accountId, amount, ...}
-
-T2 TX100
- |
- +--> lookup TX100
- |
- +--> copy T1 fields
- |
- +--> existing transformation
- |
- +--> output
-
-T3 TX100
- |
- +--> lookup TX100
- |
- +--> copy T1 fields
- |
- +--> existing transformation
- |
- +--> output
-
-T4 TX100
- |
- +--> lookup TX100
- |
- +--> copy T1 fields
- |
- +--> existing transformation
- |
- +--> output
-
-Terminal TX100
- |
- +--> delete TX100 state
-```
-
----
-
-# 32. Production behavior for rare out-of-order case
-
-```text
-T2 TX100
- |
- +--> lookup TX100
- |
- +--> NOT FOUND
- |
- +--> durable retry topic
- |
- |
-T1 TX100 arrives
- |
- +--> state store updated
- |
- |
-retry T2 TX100
- |
- +--> lookup TX100
- |
- +--> FOUND
- |
- +--> enrich
- |
- +--> output
-```
-
-No JVM waiting list is involved.
-
----
-
-# 33. What you need to replace
-
-Search for every:
-
-```text
-TODO
-```
-
-and provide:
-
-1. Actual input topic.
-2. Actual output topic.
-3. Existing Avro event type.
-4. Existing Avro serde.
-5. T1 field extraction.
-6. T2/T3/T4 enrichment mapping.
-7. Terminal event condition.
-8. Existing retry/DLT mechanism.
-9. Kafka partition count.
-10. Production state directory.
-11. Existing Schema Registry configuration.
-
----
-
-# 34. Recommended implementation order
-
-Don't implement everything simultaneously.
-
-### Phase 1
-
-Get this working:
-
-```text
-Input
-  ↓
-selectKey(transactionId)
-  ↓
-T1 → state
-  ↓
-T2/T3/T4 → lookup
-  ↓
-enrich
-  ↓
+repartitioned
+      ↓
+processor
+      ↓
+enriched
+      ↓
+existing transformation
+      ↓
 output
 ```
 
-### Phase 2
+---
 
-Add:
+# 21. Re-keying is mandatory
 
-```text
-missing T1
-    ↓
-retry topic
+Because your Kafka record key is **not** the transaction ID:
+
+```java
+.selectKey(
+    (oldKey, record) ->
+        record.get("transaction_id").toString()
+)
 ```
 
-### Phase 3
+must happen before stateful processing.
 
-Add:
-
-```text
-terminal event
-    ↓
-state deletion
-```
-
-### Phase 4
-
-Tune:
+Then:
 
 ```text
-threads
-cache
-commit
-partitions
-state disk
-retry
+T1 ABC123
+T2 ABC123
+T3 ABC123
+T4 ABC123
+
+       ↓
+
+transaction_id = ABC123
+       ↓
+same Kafka partition
+       ↓
+same Kafka Streams task
+       ↓
+same state store
 ```
 
-### Phase 5
-
-Testing and failure scenarios.
+This is what makes the state lookup reliable.
 
 ---
 
-# 35. Final recommendation
+# 22. Will we need a new Kafka topic?
 
-For your stated constraints, I would **not add Redis, a database, an application-level cache, or a new manually managed state topic**.
+### You do not need a new business topic.
 
-The target architecture is:
+Kafka Streams will create internal topics.
+
+At minimum, expect an internal repartition topic:
 
 ```text
-                  Existing Kafka Topic
-                          |
-                          v
-                     Avro Event
-                          |
-                          v
-                selectKey(transactionId)
-                          |
-                          v
-              Kafka Streams Repartition
-                          |
-              +-----------+-----------+
-              |                       |
-              v                       v
-             T1                    T2/T3/T4
-              |                       |
-              v                       v
-         Compact T1 State        T1 State Lookup
-              |                       |
-              +-----------+-----------+
-                          |
-                          v
-                       Enrich
-                          |
-                +---------+---------+
-                |                   |
-             success             missing T1
-                |                   |
-                v                   v
-             Output            Kafka Retry
-                                    |
-                                    v
-                               Re-process
-                                    |
-                                    v
-                               DLQ if exhausted
-
-Terminal event
-      |
-      v
-Delete T1 state
+<application-id>-transaction-id-repartition
 ```
 
-This keeps transaction state **inside Kafka Streams**, keeps JVM memory bounded, uses your existing Avro/Schema Registry infrastructure, handles your different original Kafka record key, and gives you a durable path for the rare case where T2/T3/T4 arrives before T1.
+and a state-store changelog topic similar to:
+
+```text
+<application-id>-transaction-t1-state-store-changelog
+```
+
+Names depend on topology naming.
+
+These are infrastructure topics, not new business output topics.
+
+Kafka Streams needs permission to create/read/write them.
+
+---
+
+# 23. State store behavior
+
+The state is:
+
+```text
+transaction_id → T1
+```
+
+Example:
+
+```text
+ABC123 → T1
+XYZ456 → T1
+LMN999 → T1
+```
+
+T2:
+
+```text
+ABC123
+   ↓
+lookup
+   ↓
+T1
+   ↓
+enrich T2
+```
+
+T3:
+
+```text
+ABC123
+   ↓
+lookup
+   ↓
+T1
+   ↓
+enrich T3
+```
+
+T4/terminal:
+
+```text
+ABC123
+   ↓
+lookup
+   ↓
+T1
+   ↓
+enrich T4
+   ↓
+finished
+   ↓
+delete ABC123
+```
+
+---
+
+# 24. State retention
+
+There are two concepts.
+
+## A. Normal lifecycle cleanup
+
+When:
+
+```text
+action = finished
+```
+
+delete:
+
+```java
+stateStore.delete(transactionId);
+```
+
+This should be the normal cleanup path.
+
+## B. Maximum safety lifetime
+
+You currently want approximately:
+
+```text
+90 days
+```
+
+until business confirms the exact requirement.
+
+Do not treat Kafka topic retention as the only mechanism for deleting state from the local store.
+
+The final implementation should have an explicit policy for stale transactions.
+
+Keep the retention value configurable.
+
+---
+
+# 25. State size and memory
+
+Current estimates:
+
+```text
+10,000 active transactions
+×
+12 KB T1
+≈
+120 MB raw payload
+```
+
+Actual state-store disk consumption will be larger due to:
+
+- RocksDB overhead
+- serialization
+- indexes
+- changelog
+- compaction
+- metadata
+
+This is still a manageable workload.
+
+### Important
+
+Do not maintain:
+
+```java
+Map<String, GenericRecord> allTransactions;
+```
+
+on the JVM heap.
+
+Use the Kafka Streams state store.
+
+If enrichment only needs a subset of T1, create a compact state model later.
+
+---
+
+# 26. Performance
+
+Peak:
+
+```text
+34,000 messages/hour
+≈ 9.44 messages/sec
+```
+
+This is modest for Kafka Streams.
+
+The additional operation is:
+
+```text
+input
+ ↓
+re-key
+ ↓
+repartition topic
+ ↓
+state store
+```
+
+There is some network and Kafka I/O overhead.
+
+But the benefits are:
+
+- durable state
+- automatic recovery
+- no Redis
+- no DB
+- no unbounded async queue
+- partition-aware processing
+- Kafka-native backpressure
+
+For this use case, the trade-off is favorable.
+
+---
+
+# 27. Kafka Streams threads
+
+Your old configuration:
+
+```text
+Kafka listener concurrency = 1
+```
+
+does not directly map to Kafka Streams.
+
+Start with:
+
+```yaml
+num.stream.threads: 1
+```
+
+Then tune only if needed.
+
+Kafka Streams parallelism is also limited by the number of input partitions.
+
+Do not increase stream threads blindly.
+
+---
+
+# 28. Recommended Kafka Streams configuration
+
+Example:
+
+```yaml
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+
+    streams:
+      application-id: ${KAFKA_STREAMS_APPLICATION_ID:<application-name>-transaction-enrichment>
+
+    properties:
+      processing.guarantee: at_least_once
+
+      num.stream.threads: 1
+
+      state.dir: ${KAFKA_STREAMS_STATE_DIR:/tmp/<application-name>/kafka-streams}
+
+      replication.factor: 3
+
+      cache.max.bytes.buffering: 10485760
+
+      compression.type: lz4
+
+      auto.offset.reset: earliest
+
+transaction-enrichment:
+  input-topic: ${TRANSACTION_INPUT_TOPIC}
+  output-topic: ${TRANSACTION_OUTPUT_TOPIC}
+
+  state-store-name: transaction-t1-state-store
+
+  state-retention-days: 90
+
+  terminal-action: finished
+
+  initial-action: submit
+```
+
+Use the application's existing security/SSL/SASL configuration.
+
+Do not overwrite existing Kafka properties accidentally.
+
+---
+
+# 29. Processing guarantee
+
+Start with:
+
+```text
+at_least_once
+```
+
+unless your business requires exactly-once semantics.
+
+At-least-once is simpler and generally sufficient if:
+
+- downstream processing is idempotent
+- duplicate output can be handled
+- existing application already tolerates Kafka retries
+
+Exactly-once can be considered later after validating the entire topology.
+
+---
+
+# 30. DLQ
+
+Your DLQ producer is:
+
+```java
+KafkaTemplate<String, String>
+```
+
+Keep it separate.
+
+The DLQ payload can contain:
+
+```text
+transaction_id
+error type
+error message
+original payload
+timestamp
+source topic
+partition
+offset
+```
+
+Example conceptual DLQ JSON:
+
+```json
+{
+  "transactionId": "ABC123",
+  "errorType": "MISSING_TRANSACTION_STATE",
+  "errorMessage": "T1 state not found",
+  "sourceTopic": "input-topic",
+  "partition": 2,
+  "offset": 123456,
+  "timestamp": 1780000000000
+}
+```
+
+The exact DLQ strategy should follow your application's existing error-handling standard.
+
+---
+
+# 31. Important DLQ caveat
+
+A normal Kafka Streams processor cannot simply call:
+
+```java
+dlqKafkaTemplate.send(...)
+```
+
+and assume the Streams topology has atomic behavior.
+
+If the record is forwarded/committed while DLQ publishing fails, you can get inconsistent behavior.
+
+For the first implementation, keep DLQ handling explicit and align it with your existing error-handling model.
+
+If DLQ publishing must be atomic with the Kafka Streams transaction, we should design that separately.
+
+---
+
+# 32. T2-before-T1
+
+Your normal ordering:
+
+```text
+T1 → T2 → T3 → T4
+```
+
+works naturally.
+
+Rare case:
+
+```text
+T2 → T1 → T3 → T4
+```
+
+must not result in incomplete output.
+
+Production solution:
+
+```text
+T2
+ ↓
+T1 not found
+ ↓
+durable pending-event handling
+ ↓
+T1 arrives
+ ↓
+T2 retried/reprocessed
+ ↓
+enrich
+ ↓
+output
+```
+
+Do not use JVM memory to park the event.
+
+---
+
+# 33. Existing producer
+
+Your existing producer:
+
+```java
+KafkaTemplate<String, GenericRecord>
+```
+
+does not need to be replaced merely because Kafka Streams is introduced.
+
+However, once the Kafka Streams topology is responsible for this flow, the preferred path is:
+
+```text
+KStream
+   ↓
+transformation
+   ↓
+KStream.to(outputTopic)
+```
+
+rather than:
+
+```text
+Kafka Streams
+   ↓
+KafkaTemplate.send(...)
+```
+
+This keeps the stream topology declarative and lets Kafka Streams manage the output producer.
+
+Your existing `KafkaTemplate<String, GenericRecord>` can remain for other application paths.
+
+---
+
+# 34. Existing JSON.put logic
+
+If your existing business logic does:
+
+```java
+genericRecord.put(
+    "someField",
+    value
+);
+```
+
+that is perfectly compatible.
+
+You can continue doing:
+
+```java
+GenericRecord enriched =
+    enricher.enrich(
+        currentEvent,
+        t1Record
+    );
+```
+
+The enrichment layer doesn't need to change to `Map<String,Object>`.
+
+---
+
+# 35. Do not introduce a JSON Map conversion
+
+Do not introduce:
+
+```text
+GenericRecord
+ ↓
+Map<String,Object>
+ ↓
+GenericRecord
+```
+
+unless your existing business code specifically requires it.
+
+That adds unnecessary:
+
+- conversion
+- memory allocation
+- CPU
+- garbage collection
+- schema/type risks
+
+Keep:
+
+```text
+GenericRecord → GenericRecord
+```
+
+throughout the main stream.
+
+---
+
+# 36. Final target data flow
+
+```text
+                         INPUT TOPIC
+                              │
+                              │
+                              ▼
+                    GenericRecord SerDe
+                              │
+                              ▼
+                    KStream<String,
+                       GenericRecord>
+                              │
+                              ▼
+                  extract transaction_id
+                              │
+                              ▼
+                     selectKey(transaction_id)
+                              │
+                              ▼
+                    INTERNAL REPARTITION
+                              │
+                              ▼
+                    STATEFUL PROCESSOR
+                              │
+                 ┌────────────┼────────────┐
+                 │            │            │
+               submit        T2/T3/...   finished
+                 │            │            │
+                 ▼            ▼            ▼
+              save T1     lookup T1     lookup T1
+                              │            │
+                              ▼            ▼
+                           enrich       enrich
+                              │            │
+                              └─────┬──────┘
+                                    │
+                                    ▼
+                         GenericRecord enriched
+                                    │
+                                    ▼
+                     Existing transformation
+                                    │
+                                    ▼
+                         GenericRecord output
+                                    │
+                                    ▼
+                             OUTPUT TOPIC
+                                    │
+                                    ▼
+                            delete T1 state
+```
+
+---
+
+# 37. What should happen to the old `@Async` executor
+
+Do not migrate the executor configuration into Kafka Streams.
+
+Old:
+
+```text
+core pool
+max pool
+queue
+thread prefix
+```
+
+New:
+
+```text
+Kafka Streams threads
+partitions
+state store
+Kafka buffering
+```
+
+If the executor is used elsewhere, retain it.
+
+---
+
+# 38. Production memory rules
+
+Never do:
+
+```java
+private final Map<String, GenericRecord> state =
+        new ConcurrentHashMap<>();
+```
+
+Never do:
+
+```java
+List<GenericRecord> pendingEvents;
+```
+
+without a hard bound.
+
+Never do:
+
+```java
+@Async
+CompletableFuture
+```
+
+inside the stateful processor.
+
+Never keep a full Kafka backlog in an executor queue.
+
+Use:
+
+```text
+Kafka
+ +
+Kafka Streams state store
+ +
+bounded processing
+```
+
+---
+
+# 39. Production observability
+
+Monitor at minimum:
+
+### Kafka
+
+- input consumer lag
+- output producer latency
+- repartition topic lag
+- state changelog lag
+- records/sec
+
+### Kafka Streams
+
+- task state
+- rebalance count
+- stream thread state
+- processing latency
+- skipped records
+- restore duration
+
+### State store
+
+- number of active keys
+- RocksDB disk usage
+- state restore time
+- changelog size
+
+### JVM
+
+- heap used
+- heap committed
+- GC frequency
+- GC pause
+- CPU
+- container memory
+
+### Business
+
+- T1 count
+- T2/T3/T4 count
+- missing-T1 count
+- terminal event count
+- enrichment failures
+- DLQ count
+
+---
+
+# 40. Migration plan
+
+Do this incrementally.
+
+## Phase 1 — infrastructure
+
+Add:
+
+```text
+Kafka Streams dependency
+Kafka Streams configuration
+GenericRecord SerDe integration
+state store configuration
+```
+
+## Phase 2 — minimal topology
+
+Build:
+
+```text
+input
+ ↓
+GenericRecord
+ ↓
+selectKey(transaction_id)
+ ↓
+repartition
+ ↓
+output
+```
+
+Validate that the output is identical to the existing flow.
+
+## Phase 3 — state
+
+Add:
+
+```text
+submit
+ ↓
+state store
+```
+
+Validate state restoration after restart.
+
+## Phase 4 — enrichment
+
+Add:
+
+```text
+T2/T3/T4
+ ↓
+lookup T1
+ ↓
+enrich
+```
+
+## Phase 5 — existing transformation
+
+Move/reuse the business logic from `AsyncProcessingService`.
+
+## Phase 6 — terminal cleanup
+
+```text
+finished
+ ↓
+enrich
+ ↓
+output
+ ↓
+delete state
+```
+
+## Phase 7 — rare out-of-order case
+
+Implement durable pending T2/T3/T4 handling.
+
+## Phase 8 — cutover
+
+Disable the old:
+
+```text
+@KafkaListener → @Async
+```
+
+flow for this input topic.
+
+---
+
+# 41. Validation checklist before production
+
+## Functional
+
+- [ ] T1 saves correctly
+- [ ] T1 output is correct
+- [ ] T2 uses T1
+- [ ] T3 uses T1
+- [ ] T4 uses T1
+- [ ] More than four events work
+- [ ] `finished` deletes state
+- [ ] T2-before-T1 does not lose data
+- [ ] transaction IDs are extracted from payload
+- [ ] original Kafka record key is not incorrectly used as transaction ID
+
+## Kafka
+
+- [ ] Input partitions verified
+- [ ] Output partitions verified
+- [ ] Repartition topic permissions verified
+- [ ] Changelog topic permissions verified
+- [ ] Internal topic replication configured
+- [ ] Application ID is unique
+- [ ] Existing Kafka security configuration reused
+
+## Serialization
+
+- [ ] Input GenericRecord SerDe works
+- [ ] Output GenericRecord SerDe works
+- [ ] Schema Registry configuration is compatible
+- [ ] No unnecessary GenericRecord → Map conversion
+- [ ] Existing KafkaTemplate<String, GenericRecord> remains compatible
+
+## Performance
+
+- [ ] 34K/hour load tested
+- [ ] 10K active transactions tested
+- [ ] 10–12 KB T1 tested
+- [ ] JVM heap monitored
+- [ ] RocksDB disk monitored
+- [ ] state restoration tested
+- [ ] application restart tested
+- [ ] rebalance tested
+
+## Failure recovery
+
+- [ ] Application restart after T1
+- [ ] Application restart between T1/T2
+- [ ] Kafka Streams state restoration
+- [ ] broker outage
+- [ ] consumer rebalance
+- [ ] serialization error
+- [ ] enrichment error
+- [ ] DLQ behavior
+- [ ] missing T1 behavior
+
+---
+
+# 42. Final class responsibility map
+
+| Class | Responsibility |
+|---|---|
+| `KafkaConsumerService` | **No longer consumes this transaction topic** |
+| `AsyncProcessingService` | **Business logic extracted/reused; `@Async` path removed for this flow** |
+| `KafkaStreamsConfig` | Kafka Streams runtime configuration |
+| `TransactionEnrichmentTopology` | Defines the stream topology |
+| `GenericRecordSerdeProvider` | Reuses/configures existing GenericRecord serialization |
+| `TransactionEnrichmentProcessor` | Stateful T1 lookup/save/delete |
+| `TransactionState` | State representation |
+| `TransactionStateSerde` | State-store serialization |
+| `TransactionEnricher` | T1 → T2/T3/T4 enrichment rules |
+| `ExistingTransformationAdapter` | Existing business transformation |
+| `MissingTransactionStateException` | Missing T1 condition |
+| Existing `KafkaTemplate<String, GenericRecord>` | Can remain for other producer flows |
+| Existing `KafkaTemplate<String, String>` | DLQ producer |
+
+---
+
+# 43. Final architecture decision
+
+The final design is:
+
+```text
+                 Kafka input
+                     │
+                     ▼
+              Kafka Streams
+                     │
+          GenericRecord SerDe
+                     │
+                     ▼
+          selectKey(transaction_id)
+                     │
+                     ▼
+             Kafka repartition
+                     │
+                     ▼
+           Persistent State Store
+                     │
+          ┌──────────┼───────────┐
+          │          │           │
+         T1       T2/T3/...   finished
+          │          │           │
+        save      lookup T1    lookup T1
+                     │           │
+                   enrich      enrich
+                     │           │
+                     └─────┬─────┘
+                           ▼
+                  Existing transformation
+                           │
+                           ▼
+                  GenericRecord output
+                           │
+                           ▼
+                    Output topic
+                           │
+                    finished cleanup
+```
+
+This keeps your existing `GenericRecord` model and producer contract, removes the need for a Redis/database, avoids an in-memory transaction map, and uses Kafka Streams for the stateful part that your current `@Async` design cannot safely provide.
