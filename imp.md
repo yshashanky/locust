@@ -47,6 +47,8 @@ T1 normally arrives first, but a later event can very rarely arrive before T1.
 
 # 2. Target architecture
 
+The updated flow is:
+
 ```text
                          INPUT TOPIC
                       String / String
@@ -55,9 +57,24 @@ T1 normally arrives first, but a later event can very rarely arrive before T1.
               TransactionKafkaStreamsTopology
                             │
                             ▼
-                 XML event / transaction ID
+                       XML payload
                             │
-                    extract transaction_id
+                            ▼
+                 Existing XML → Avro
+                     transformation
+                            │
+                            ▼
+                    Existing SchemaProvider
+                            │
+                            ▼
+                       GenericRecord
+                            │
+                            ▼
+                 [NEW EXTERNAL LOGIC]
+                            │
+                            ▼
+                 Extract transaction_id
+                 + transaction.action
                             │
                             ▼
                  Re-key using transaction_id
@@ -67,49 +84,59 @@ T1 normally arrives first, but a later event can very rarely arrive before T1.
                             │
                             ▼
                  Kafka Streams State Store
-                    transaction_id → T1
                             │
               ┌─────────────┴──────────────┐
               │                            │
-             T1                         T2/T3/T4...
-          action=submit                       │
-              │                               │
-              ▼                               ▼
-       Store T1 information            Lookup T1 state
-                                              │
-                                              ▼
-                                   Existing processing /
-                                   enrichment logic
-                                              │
-                                              ▼
-                                   Existing XML → Avro
-                                              │
-                                              ▼
-                                  Existing SchemaProvider
-                                              │
-                                              ▼
-                                         GenericRecord
-                                              │
-                                              ▼
-                                      Kafka Streams output
-                                              │
-                                              ▼
-                              RESTRICTED / TARGETED TOPIC
-                                    String / GenericRecord
-
-final event = finished
-        │
-        ├── lookup T1
-        ├── process/enrich
-        ├── publish final output
-        └── delete transaction state
+       action = submit              action != submit
+              │                            │
+              ▼                            ▼
+       Store T1 GenericRecord        Lookup T1 GenericRecord
+                                           │
+                                           ▼
+                                  Existing/new enrichment
+                                           │
+                                           ▼
+                                  Updated GenericRecord
+                                           │
+                                           ▼
+                                  Output / targeted topic
 ```
 
-The important point is:
+### Important design decision
 
-**Kafka Streams is being introduced to solve durable transaction state management. It is not replacing your existing XML/Avro business transformation.**
+The XML → Avro transformation happens **before the state store**.
 
----
+The state store therefore stores the already-transformed `GenericRecord` for T1 rather than raw XML.
+
+The processing order is:
+
+```text
+XML
+ ↓
+XML → Avro
+ ↓
+SchemaProvider
+ ↓
+GenericRecord
+ ↓
+External logic
+ ↓
+Extract transaction ID/action
+ ↓
+Re-key
+ ↓
+Repartition
+ ↓
+State Store
+ ↓
+T1 store OR later-event lookup
+ ↓
+Enrichment/update
+ ↓
+Output
+```
+
+This preserves the existing XML/Avro transformation while allowing the new stateful logic to operate on `GenericRecord`.
 
 # 3. Existing types
 
@@ -411,19 +438,24 @@ Path:
 src/main/java/<your-package>/kafka/TransactionKafkaStreamsTopology.java
 ```
 
-This is the main topology class.
+This is the main Kafka Streams topology.
 
-It is the **logical entry point of the Kafka Streams processing flow**.
+The input is:
 
-Kafka Streams internally creates and manages the Kafka consumer.
-
-You do not manually call:
-
-```java
-consumer.poll()
+```text
+String key
+String XML value
 ```
 
-## Topology
+The XML is immediately passed to the existing XML → Avro transformation.
+
+The topology then works with:
+
+```text
+GenericRecord
+```
+
+### Updated topology flow
 
 ```java
 package <your-package>.kafka;
@@ -443,16 +475,20 @@ public class TransactionKafkaStreamsTopology {
     private String inputTopic;
 
     @Bean
-    public KStream<String, String> transactionStream(
+    public KStream<String, GenericRecord> transactionStream(
             StreamsBuilder builder,
+            ExistingXmlToAvroTransformer xmlToAvroTransformer,
             TransactionEventParser eventParser,
             TransactionProcessor transactionProcessor) {
 
         /*
-         * INPUT:
+         * STEP 1
          *
-         * Kafka key   = String
-         * Kafka value = XML String
+         * Read the existing input topic.
+         *
+         * Kafka record:
+         *   key   = String
+         *   value = XML String
          */
         KStream<String, String> inputStream =
                 builder.stream(
@@ -464,69 +500,103 @@ public class TransactionKafkaStreamsTopology {
                 );
 
         /*
-         * Parse only the metadata required to route the event.
+         * STEP 2
          *
-         * The original XML remains inside TransactionEvent.
+         * Existing XML -> Avro conversion.
+         *
+         * This must reuse your existing application logic.
+         *
+         * TODO:
+         * Replace ExistingXmlToAvroTransformer with the actual
+         * transformer/service from your application.
          */
-        KStream<String, TransactionEvent> events =
+        KStream<String, GenericRecord> avroStream =
                 inputStream.mapValues(
+                        xmlToAvroTransformer::transform
+                );
+
+        /*
+         * STEP 3
+         *
+         * Any new logic that you want to execute immediately
+         * after GenericRecord creation can be added here.
+         *
+         * TODO:
+         * Add your new external logic here if it does not require
+         * previously stored T1 state.
+         */
+
+        /*
+         * STEP 4
+         *
+         * Extract:
+         *   transaction.transaction_id
+         *   transaction.action
+         *
+         * from the GenericRecord.
+         */
+        KStream<String, TransactionEvent> eventStream =
+                avroStream.mapValues(
                         eventParser::parse
                 );
 
         /*
-         * IMPORTANT:
+         * STEP 5
          *
-         * The Kafka record key is NOT transaction_id.
+         * The original Kafka record key is NOT the transaction ID.
          *
-         * Therefore we explicitly re-key using the transaction ID.
+         * Explicitly use transaction_id as the new Kafka Streams key.
          */
         KStream<String, TransactionEvent> transactionKeyedStream =
-                events.selectKey(
-                        (kafkaRecordKey, event) ->
+                eventStream.selectKey(
+                        (originalKey, event) ->
                                 event.getTransactionId()
                 );
 
         /*
-         * Repartition guarantees that events having the same
-         * transaction ID are processed by the same Kafka Streams
-         * task/state-store partition.
+         * STEP 6
          *
-         * Kafka Streams creates the required internal repartition
-         * topic automatically.
+         * Repartition by transaction_id.
+         *
+         * This guarantees that events for the same transaction
+         * are routed to the same state-store partition.
+         *
+         * TODO:
+         * Configure explicit repartition name/SerDes if required
+         * by the final topology.
          */
-        KStream<String, TransactionEvent> repartitioned =
+        KStream<String, TransactionEvent> repartitionedStream =
                 transactionKeyedStream.repartition();
 
         /*
-         * Stateful processing.
+         * STEP 7
          *
-         * TransactionProcessor is responsible for:
+         * Stateful processing:
          *
          * T1 / submit:
-         *      save T1 state
+         *      store T1 GenericRecord
          *
          * T2/T3/T4/...:
-         *      retrieve T1 state
+         *      lookup T1 GenericRecord
+         *      enrich/update current GenericRecord
          *
          * finished:
-         *      retrieve T1
-         *      process
+         *      process final event
          *      delete state
+         *
+         * TODO:
+         * Finalize the Processor API implementation and state-store
+         * registration once the exact GenericRecord state schema
+         * and existing enrichment method are integrated.
          */
-        return repartitioned.process(
-                transactionProcessor
+        return transactionProcessor.process(
+                repartitionedStream
         );
     }
 }
 ```
 
-### Important
-
-The exact `repartition()` configuration should be completed with explicit SerDes/name if required by your Kafka Streams version and topology conventions.
-
-**TODO — configure the repartition SerDes using the actual `TransactionEvent` representation selected below.**
-
----
+**Important:** the above is the topology structure. The exact method signatures of your existing XML → Avro transformer and SchemaProvider must replace the placeholders.
 
 # 9. File 3 — `TransactionEvent.java`
 
@@ -536,27 +606,29 @@ Path:
 src/main/java/<your-package>/kafka/TransactionEvent.java
 ```
 
-This is **not a replacement for the XML payload**.
+This class now represents the already-transformed event.
 
-It is a small wrapper around the incoming event.
+It should not contain the XML payload as the primary processing object.
 
 ```java
 package <your-package>.kafka;
+
+import org.apache.avro.generic.GenericRecord;
 
 public class TransactionEvent {
 
     private final String transactionId;
     private final String action;
-    private final String xmlPayload;
+    private final GenericRecord record;
 
     public TransactionEvent(
             String transactionId,
             String action,
-            String xmlPayload) {
+            GenericRecord record) {
 
         this.transactionId = transactionId;
         this.action = action;
-        this.xmlPayload = xmlPayload;
+        this.record = record;
     }
 
     public String getTransactionId() {
@@ -567,21 +639,25 @@ public class TransactionEvent {
         return action;
     }
 
-    public String getXmlPayload() {
-        return xmlPayload;
+    public GenericRecord getRecord() {
+        return record;
     }
 }
 ```
 
-Purpose:
+The important distinction is:
 
 ```text
-transactionId = used as Kafka Streams state key
-action        = submit / finished / intermediate action
-xmlPayload    = original XML
+XML
+ ↓
+existing transformation
+ ↓
+GenericRecord
+ ↓
+TransactionEvent
 ```
 
----
+The state store will retain the T1 `GenericRecord`.
 
 # 10. File 4 — `TransactionEventParser.java`
 
@@ -591,73 +667,77 @@ Path:
 src/main/java/<your-package>/kafka/TransactionEventParser.java
 ```
 
-This class should reuse your existing XML parsing implementation.
+This parser receives a `GenericRecord`, not XML.
 
-Do not introduce JSON parsing.
+Its only responsibility is extracting the fields required by Kafka Streams:
+
+```text
+transaction.transaction_id
+transaction.action
+```
 
 ```java
 package <your-package>.kafka;
 
+import org.apache.avro.generic.GenericRecord;
 import org.springframework.stereotype.Component;
 
 @Component
 public class TransactionEventParser {
 
-    public TransactionEvent parse(String xmlPayload) {
-
-        /*
-         * TODO — integrate your existing XML parser.
-         *
-         * Extract:
-         *
-         * 1. Kafka transaction.transaction_id
-         * 2. Kafka transaction.action
-         *
-         * Do NOT convert the entire XML here.
-         *
-         * Return the original XML unchanged as xmlPayload.
-         */
+    public TransactionEvent parse(GenericRecord record) {
 
         String transactionId =
-                extractTransactionId(xmlPayload);
+                extractTransactionId(record);
 
         String action =
-                extractTransactionAction(xmlPayload);
+                extractTransactionAction(record);
 
         return new TransactionEvent(
                 transactionId,
                 action,
-                xmlPayload
+                record
         );
     }
 
     private String extractTransactionId(
-            String xmlPayload) {
+            GenericRecord record) {
 
         /*
-         * TODO — replace with your existing XML parsing logic.
+         * TODO:
+         *
+         * Replace this with the exact GenericRecord field path
+         * used by your existing Avro schema.
+         *
+         * Example only:
+         *
+         * GenericRecord transaction =
+         *         (GenericRecord) record.get("transaction");
+         *
+         * return transaction.get("transaction_id").toString();
          */
         throw new UnsupportedOperationException(
-                "Integrate existing transaction_id XML extraction"
+                "Integrate actual transaction_id extraction"
         );
     }
 
     private String extractTransactionAction(
-            String xmlPayload) {
+            GenericRecord record) {
 
         /*
-         * TODO — replace with your existing XML parsing logic.
+         * TODO:
+         *
+         * Replace this with the exact GenericRecord field path
+         * used by your existing Avro schema.
          */
         throw new UnsupportedOperationException(
-                "Integrate existing transaction.action XML extraction"
+                "Integrate actual transaction.action extraction"
         );
     }
 }
 ```
 
-Do not write a second XML parser if your existing application already has one.
-
----
+Do not guess the Avro field path. Use the schema already returned by your existing SchemaProvider.
 
 # 11. File 5 — `TransactionStateStore.java`
 
@@ -667,52 +747,95 @@ Path:
 src/main/java/<your-package>/kafka/TransactionStateStore.java
 ```
 
-For this application, the state store only needs to retain the T1 information required for later processing.
-
-Do **not** create an Avro state model.
-
-Conceptually:
+The state store represents:
 
 ```text
-transaction_id → T1 XML
+transaction_id → T1 GenericRecord
 ```
 
-The state-store implementation will be registered through the Kafka Streams topology.
+The value is therefore the already-transformed T1 `GenericRecord`.
 
-The state is durable and managed by Kafka Streams rather than being held in a normal JVM `Map`.
+Do not use a JVM `Map`.
 
----
+The actual Kafka Streams store should be a persistent state store registered with the topology.
+
+Recommended conceptual API:
+
+```java
+public interface TransactionStateStore {
+
+    void put(
+            String transactionId,
+            GenericRecord t1Record
+    );
+
+    GenericRecord get(
+            String transactionId
+    );
+
+    void delete(
+            String transactionId
+    );
+}
+```
+
+**TODO — implement this interface using a Kafka Streams `KeyValueStore<String, GenericRecord>` registered with the topology.**
+
+The store must be backed by Kafka Streams' changelog mechanism so it can recover after application restart.
 
 # 12. File 6 — `TransactionStateStoreSerde.java`
 
-The state store should not require your output Avro schema.
-
-The internal state can be represented as:
+Because the state value is now:
 
 ```text
-String transactionId
-String T1 XML payload
+GenericRecord
 ```
 
-For the initial implementation, use a JSON/string-based internal representation only if necessary.
+the state store cannot use:
 
-However, because the exact T1 information that must survive is dependent on your existing `AsyncProcessingService`, this part should not be over-designed yet.
-
-**TODO — after mapping the existing XML processing code, select whether the state value should contain:**
-
-```text
-A. complete T1 XML
+```java
+Serdes.String()
 ```
 
-or:
+for the value.
 
-```text
-B. only the T1 fields required by the enrichment/transformation logic
+The state store needs a `Serde<GenericRecord>`.
+
+Use the Confluent Generic Avro SerDe with the existing Schema Registry configuration.
+
+Conceptually:
+
+```java
+GenericAvroSerde genericAvroSerde = new GenericAvroSerde();
+
+Map<String, Object> serdeConfig = new HashMap<>();
+
+serdeConfig.put(
+        AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG,
+        schemaRegistryUrl
+);
+
+serdeConfig.put(
+        AbstractKafkaSchemaSerDeConfig.AUTO_REGISTER_SCHEMAS,
+        false
+);
+
+serdeConfig.put(
+        AbstractKafkaSchemaSerDeConfig.USE_LATEST_VERSION,
+        false
+);
+
+genericAvroSerde.configure(
+        serdeConfig,
+        false
+);
 ```
 
-Option B is preferable if the required fields are known because it reduces state size.
+**TODO — use the existing application Schema Registry/security properties rather than duplicating configuration.**
 
----
+**TODO — verify that the state-store GenericRecord schema is compatible with the records being stored.**
+
+Do not create a local Avro schema merely for this state store.
 
 # 13. File 7 — `TransactionProcessor.java`
 
@@ -722,105 +845,80 @@ Path:
 src/main/java/<your-package>/kafka/TransactionProcessor.java
 ```
 
-This is the main stateful processing point.
+This is where the stateful business flow starts.
 
 Conceptually:
 
 ```text
-T1 / submit
+GenericRecord
     ↓
-save T1 state
-
-T2/T3/T4
+transaction_id + action
     ↓
-lookup T1
+repartitioned by transaction_id
     ↓
-call existing processing
-    ↓
-produce output
-
-finished
-    ↓
-lookup T1
-    ↓
-call existing processing
-    ↓
-produce output
-    ↓
-delete state
+TransactionProcessor
+    │
+    ├── submit
+    │      ↓
+    │   store current GenericRecord as T1
+    │
+    └── other event
+           ↓
+        lookup T1 GenericRecord
+           ↓
+        enrichment / update
+           ↓
+        output GenericRecord
 ```
 
-The processor should **not contain the XML → Avro business transformation itself**.
+For `finished`:
 
-It should call the existing application processing.
+```text
+lookup T1
+   ↓
+process final event
+   ↓
+publish
+   ↓
+delete transaction state
+```
+
+The processor should not recreate XML → Avro processing.
+
+It receives a `GenericRecord` that has already gone through the existing transformation.
+
+**TODO — implement this using the Kafka Streams Processor API / state store access.**
+
+A high-level processing contract is:
 
 ```java
-package <your-package>.kafka;
+public GenericRecord process(
+        String transactionId,
+        String action,
+        GenericRecord currentRecord,
+        GenericRecord t1Record) {
 
-import org.springframework.stereotype.Component;
+    if ("submit".equalsIgnoreCase(action)) {
 
-@Component
-public class TransactionProcessor {
+        // TODO:
+        // Store currentRecord as T1 state.
 
-    /*
-     * TODO:
-     *
-     * Wire the Kafka Streams state store here.
-     *
-     * Also wire the existing business-processing service.
-     */
-
-    public TransactionEvent process(
-            TransactionEvent event) {
-
-        String transactionId =
-                event.getTransactionId();
-
-        String action =
-                event.getAction();
-
-        if ("submit".equalsIgnoreCase(action)) {
-
-            /*
-             * T1:
-             *
-             * Save the T1 information into the state store.
-             *
-             * TODO:
-             * Implement stateStore.put(transactionId, T1 data)
-             */
-
-            return event;
-        }
-
-        /*
-         * T2/T3/T4/final:
-         *
-         * TODO:
-         *
-         * 1. stateStore.get(transactionId)
-         * 2. If T1 exists, pass:
-         *
-         *      current XML
-         *      +
-         *      T1 data
-         *
-         *    to existing processing.
-         *
-         * 3. If action == finished:
-         *      stateStore.delete(transactionId)
-         */
-
-        return event;
+        return currentRecord;
     }
+
+    // TODO:
+    // Retrieve T1 state.
+    //
+    // Apply your enrichment/update logic to currentRecord
+    // using t1Record.
+    //
+    // Return the final GenericRecord to publish.
+
+    return currentRecord;
 }
 ```
 
-This is deliberately the integration boundary for your existing code.
-
-The actual implementation should be completed after mapping the current `AsyncProcessingService`.
-
----
+Do not use this method signature directly if the Processor API requires a different callback shape. It describes the business contract only.
 
 # 14. Existing `AsyncProcessingService`
 
@@ -1298,7 +1396,7 @@ consume
 
 # 30. Final flow
 
-The complete target flow is:
+The final target flow is:
 
 ```text
 APPLICATION START
@@ -1325,56 +1423,72 @@ String / String
 XML String
        │
        ▼
-TransactionEventParser
+Existing XML → Avro transformer
        │
-       ├── transaction_id
-       ├── transaction.action
-       └── original XML
+       ▼
+Existing SchemaProvider
+       │
+       ▼
+GenericRecord
+       │
+       ▼
+[NEW EXTERNAL LOGIC — if applicable]
+       │
+       ▼
+Extract transaction_id + transaction.action
        │
        ▼
 selectKey(transaction_id)
        │
        ▼
-Kafka Streams repartition
+Repartition
        │
        ▼
-TransactionProcessor
+Kafka Streams State Store
        │
        ├── submit
        │      ↓
-       │   save T1 state
+       │   store T1 GenericRecord
        │
-       └── subsequent event
+       └── T2/T3/T4/...
               ↓
-           lookup T1
+           lookup T1 GenericRecord
               ↓
-       existing application processing
+           enrichment/update
               ↓
-       XML → Avro transformer
+           GenericRecord
               ↓
-       SchemaProvider
-              ↓
-       GenericRecord
-              ↓
-       Kafka Streams output
-              ↓
-       OUTPUT TOPIC
+           output topic
+              │
+              ▼
        String / GenericRecord
 ```
 
 For:
 
 ```text
-action = finished
+transaction.action = finished
 ```
 
-the same flow is followed, then:
+the flow is:
 
 ```text
-stateStore.delete(transactionId)
+finished event
+    ↓
+GenericRecord
+    ↓
+transaction_id
+    ↓
+state-store lookup
+    ↓
+existing/new enrichment
+    ↓
+output GenericRecord
+    ↓
+publish
+    ↓
+delete transaction state
 ```
-
----
 
 # 31. TODO list before production
 
@@ -1423,24 +1537,34 @@ The following are the only areas intentionally left dependent on your existing c
 
 # 32. Key design rule
 
-The implementation should **add Kafka Streams state management around the existing application**, not replace the existing application's XML/Avro processing.
+The implementation should add Kafka Streams state management around the existing application.
 
-The target is:
-
-```text
-Existing business logic
-        +
-Kafka Streams state management
-        =
-final implementation
-```
-
-not:
+The new target is:
 
 ```text
-Existing application
-        ↓
-throw away
-        ↓
-new generic JSON implementation
+XML
+ ↓
+existing XML → Avro
+ ↓
+existing SchemaProvider
+ ↓
+GenericRecord
+ ↓
+new external logic (if required)
+ ↓
+transaction_id extraction
+ ↓
+re-key
+ ↓
+repartition
+ ↓
+state store
+ ↓
+T1 store / T1 lookup
+ ↓
+enrichment/update
+ ↓
+GenericRecord output
 ```
+
+The existing XML/Avro processing is **not being replaced**.
