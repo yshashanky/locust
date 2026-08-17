@@ -237,26 +237,6 @@
 - to stop: ctrl + C
 - to delete containers: docker compose rm
 
-
-
-mapped.split(Named.as("branches"))
-    .branch((k, v) -> v.isNotRestricted() == IsNotRestricted.FALSE,
-        Branched.withConsumer(ks -> ks
-                .mapValues(OmniPaymentMap::omniPayment)
-                .to(outputRestrictedTopic, Produced.with(Serdes.String(), finalEventSerde))))
-    .defaultBranch(Branched.withConsumer(ks -> {
-        // TRUE or UNCONFIRMED path continues here - rekey/process/etc.
-        KStream<String, ProcessingResult> processed = ks.process(processorSupplier, Named.as("enrichment-processor"), ENRICHMENT_STORE_NAME);
-
-        processed.split(Named.as("routed"))
-            .branch((k, v) -> v.target() == RouteTarget.OUTPUT,
-                Branched.withConsumer(rs -> rs
-                        .mapValues(ProcessingResult::payload)
-                        .to(OUTPUT_TOPIC, Produced.with(Serdes.String(), finalEventSerde))))
-            .branch((k, v) -> v.target() == RouteTarget.DISCARDED,
-                Branched.withConsumer(rs -> rs
-                        .mapValues(ProcessingResult::payload)
-                        .to(DISCARDED_TOPIC, Produced.with(Serdes.String(), finalEventSerde))))
             .defaultBranch(Branched.withConsumer(rs -> rs
                     .mapValues(ProcessingResult::payload)
                     .to(DLQ_TOPIC, Produced.with(Serdes.String(), finalEventSerde))));
